@@ -39,6 +39,9 @@ struct cooling_part_data {
   /* Total mass in dust */
   float dust_mass;  // total mass in dust
 
+  /* Fraction of dust mass in small grains (a < a_crit, two-size model) */
+  float dust_small_fraction;
+
   /* Fraction of each metal in dust */
   float dust_mass_fraction[chemistry_element_count];
 

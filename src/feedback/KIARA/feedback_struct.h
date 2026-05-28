@@ -118,6 +118,9 @@ struct feedback_spart_data {
 
   /*! Total dust mass change for each element */
   double delta_dust_mass[chemistry_element_count];
+
+  /*! Total dust mass in small grains from this feedback event */
+  double delta_dust_small_mass;
 #endif
 
   /*! Initial stream radius for firehose model */

@@ -225,6 +225,12 @@ __attribute__((always_inline)) INLINE static int cooling_write_particles(
   num++;
 
   list[num] = io_make_output_field(
+      "DustSmallGrainFraction", FLOAT, 1, UNIT_CONV_NO_UNITS, 0.f, parts,
+      cooling_data.dust_small_fraction,
+      "Fraction of dust mass in small grains (a < a_crit) in the two-size model.");
+  num++;
+
+  list[num] = io_make_output_field(
       "CoolingTimes", FLOAT, 1, UNIT_CONV_TIME, 0.f, parts,
       cooling_data.mixing_layer_cool_time,
       "Cooling times for the gas particle. If it's currently a firehose wind"
@@ -325,6 +331,25 @@ __attribute__((always_inline)) INLINE static void cooling_read_parameters(
 
   cooling->dust_growth_tauref = parser_get_opt_param_double(
       parameter_file, "KIARACooling:dust_growth_tauref", 1.0);
+
+  /* Two-size grain model parameters (Li+2021) */
+  cooling->dust_small_grainsize = parser_get_opt_param_double(
+      parameter_file, "KIARACooling:dust_small_grainsize", 0.005);
+
+  cooling->dust_large_grainsize = parser_get_opt_param_double(
+      parameter_file, "KIARACooling:dust_large_grainsize", 0.1);
+
+  cooling->dust_grain_density = parser_get_opt_param_double(
+      parameter_file, "KIARACooling:dust_grain_density", 2.4);
+
+  cooling->dust_growth_Tref = parser_get_opt_param_double(
+      parameter_file, "KIARACooling:dust_growth_Tref", 20.0);
+
+  cooling->dust_small_fraction_SNII = parser_get_opt_param_double(
+      parameter_file, "KIARACooling:dust_small_fraction_SNII", 0.005);
+
+  cooling->dust_small_fraction_AGB = parser_get_opt_param_double(
+      parameter_file, "KIARACooling:dust_small_fraction_AGB", 0.27);
 
   cooling->cold_ISM_frac = parser_get_opt_param_double(
       parameter_file, "KIARACooling:cold_ISM_frac", 1.0);

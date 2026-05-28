@@ -746,6 +746,9 @@ feedback_do_chemical_enrichment_of_gas_around_star(
   pj->feedback_data.SNe_ThisTimeStep =
       fmax(pj->feedback_data.SNe_ThisTimeStep, 0.);
 
+  /* Save old dust mass for grain size fraction update */
+  const double old_dust_mass = pj->cooling_data.dust_mass;
+
   /* Spread dust ejecta to gas */
   for (int elem = chemistry_element_He; elem < chemistry_element_count;
        elem++) {
@@ -775,6 +778,17 @@ feedback_do_chemical_enrichment_of_gas_around_star(
       pj->cooling_data.dust_mass_fraction[elem] *= dust_mass_inv;
     }
 
+    /* Update small grain fraction (mass-weighted average of existing
+     * and newly deposited dust) */
+    const double old_small_mass =
+        old_dust_mass * pj->cooling_data.dust_small_fraction;
+    const double new_small_mass =
+        si->feedback_data.delta_dust_small_mass * Omega_frac;
+    pj->cooling_data.dust_small_fraction =
+        (float)((old_small_mass + new_small_mass) * dust_mass_inv);
+    pj->cooling_data.dust_small_fraction =
+        fminf(fmaxf(pj->cooling_data.dust_small_fraction, 0.f), 1.f);
+
     /* Check for inconsistency */
     if (pj->cooling_data.dust_mass > pj->mass) {
       for (int elem = chemistry_element_He; elem < chemistry_element_count;
@@ -793,6 +807,7 @@ feedback_do_chemical_enrichment_of_gas_around_star(
     for (int elem = 0; elem < chemistry_element_count; elem++) {
       pj->cooling_data.dust_mass_fraction[elem] = 0.f;
     }
+    pj->cooling_data.dust_small_fraction = 0.f;
   }
 }
 

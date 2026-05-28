@@ -372,6 +372,10 @@ struct feedback_props {
   /*! max fraction of metals locked into dust */
   float max_dust_fraction;
 
+  /*! Fraction of newly produced dust in small grains (two-size model) */
+  float dust_small_fraction_SNII;
+  float dust_small_fraction_AGB;
+
   /*! Rolling value for number of SNe is smoothed over this timescale
    * in Myr (0 for instantaneous) */
   float SNe_smoothing_time_in_Myr;
