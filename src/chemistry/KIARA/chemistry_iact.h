@@ -564,6 +564,17 @@ __attribute__((always_inline)) INLINE static void firehose_evolve_particle_sym(
   chi->dm_dust += new_pi_dust_mass - pi_dust_mass;
   chj->dm_dust += new_pj_dust_mass - pj_dust_mass;
 
+  /* Spread small grain dust mass between particles */
+  const float pi_dust_small = pi->cooling_data.dust_small_fraction * pi_dust_mass;
+  const float pj_dust_small = pj->cooling_data.dust_small_fraction * pj_dust_mass;
+
+  const float new_pi_dust_small =
+      pii_weight * pi_dust_small + pij_weight * pj_dust_small;
+  const float new_pj_dust_small =
+      pji_weight * pi_dust_small + pjj_weight * pj_dust_small;
+  chi->dm_dust_small += new_pi_dust_small - pi_dust_small;
+  chj->dm_dust_small += new_pj_dust_small - pj_dust_small;
+
   /* Spread individual dust elements */
   for (int elem = 0; elem < chemistry_element_count; ++elem) {
     /* Exchange metals */

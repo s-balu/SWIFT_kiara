@@ -209,6 +209,9 @@ struct chemistry_part_data {
   /*! Firehose exchanged dust mass */
   float dm_dust;
 
+  /*! Firehose exchanged small-grain dust mass */
+  float dm_dust_small;
+
   /*! Firehose exchanged dust mass metals */
   float dm_dust_Z[chemistry_element_count];
 

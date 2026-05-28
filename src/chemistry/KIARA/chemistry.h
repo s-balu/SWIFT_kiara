@@ -219,6 +219,7 @@ __attribute__((always_inline)) INLINE static void chemistry_init_part(
   cpd->du = 0.;
   cpd->dm = 0.f;
   cpd->dm_dust = 0.f;
+  cpd->dm_dust_small = 0.f;
   for (int elem = 0; elem < chemistry_element_count; ++elem) {
     cpd->dZ_dt[elem] = 0.f;
     cpd->dm_Z[elem] = 0.f;
@@ -981,6 +982,14 @@ __attribute__((always_inline)) INLINE static void chemistry_end_force(
         }
 
         co->dust_mass = 0.f;
+        co->dust_small_fraction = 0.f;
+      } else if (dust_eps >= FIREHOSE_EPSILON_TOLERANCE) {
+        const float old_small_mass =
+            (co->dust_mass - ch->dm_dust) * co->dust_small_fraction;
+        co->dust_small_fraction =
+            fminf(fmaxf((old_small_mass + ch->dm_dust_small) / co->dust_mass,
+                        0.f),
+                  1.f);
       }
 
       /* Make sure that X + Y + Z = 1 */

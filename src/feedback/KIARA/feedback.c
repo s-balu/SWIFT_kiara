@@ -218,6 +218,17 @@ void feedback_dust_production_condensation(
       delta_metal_mass[k] -= sp->feedback_data.delta_dust_mass[k];
     }
   }
+
+  /* Compute total produced dust mass and assign small grain fraction
+   * based on production channel (Li+2021, Eq. 5) */
+  double total_new_dust = 0.;
+  for (k = 0; k < chemistry_element_count; k++) {
+    total_new_dust += sp->feedback_data.delta_dust_mass[k];
+  }
+  const float f_s_prod =
+      (star_age > 100.) ? fb_props->dust_small_fraction_AGB
+                        : fb_props->dust_small_fraction_SNII;
+  sp->feedback_data.delta_dust_small_mass = total_new_dust * f_s_prod;
 }
 #endif
 
@@ -1793,6 +1804,10 @@ void feedback_props_init(struct feedback_props *fp,
 #if COOLING_GRACKLE_MODE >= 2
   fp->max_dust_fraction = parser_get_opt_param_double(
       params, "KIARAFeedback:max_dust_fraction", 0.9);
+  fp->dust_small_fraction_SNII = parser_get_opt_param_double(
+      params, "KIARAFeedback:dust_small_fraction_SNII", 0.005);
+  fp->dust_small_fraction_AGB = parser_get_opt_param_double(
+      params, "KIARAFeedback:dust_small_fraction_AGB", 0.27);
   fp->SNe_smoothing_time_in_Myr = parser_get_opt_param_double(
       params, "KIARAFeedback:SNe_smoothing_time_in_Myr", 0.);
 #endif

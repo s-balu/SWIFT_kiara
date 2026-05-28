@@ -306,6 +306,9 @@ __attribute__((always_inline)) INLINE static void feedback_reset_feedback(
     sp->feedback_data.delta_dust_mass[i] = 0.;
 #endif
   }
+#if COOLING_GRACKLE_MODE >= 2
+  sp->feedback_data.delta_dust_small_mass = 0.;
+#endif
   sp->feedback_data.total_metal_mass = 0.;
 
   /* Zero the energy to inject */

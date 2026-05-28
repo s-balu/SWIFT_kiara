@@ -116,6 +116,14 @@ struct cooling_function_data {
   double dust_growth_densref;
   double dust_growth_tauref;
 
+  /*! Two-size grain model parameters (Li+2021, Hirashita 2015) */
+  double dust_small_grainsize;
+  double dust_large_grainsize;
+  double dust_grain_density;
+  double dust_growth_Tref;
+  double dust_small_fraction_SNII;
+  double dust_small_fraction_AGB;
+
   /*! For dust model, need self-enrichment up to a small metallicity to
    * kick-start dust */
   double self_enrichment_metallicity;
