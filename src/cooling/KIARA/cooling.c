@@ -1127,11 +1127,11 @@ __attribute__((always_inline)) INLINE void cooling_sputter_dust(
       /* Sputtering redistribution: large grains shrink toward small bin.
        * Timescale for large grains to shrink below a_crit is
        * t_sp,l (Eq. 12 of Li+2021) */
-      const double tsp_l =
-          1.7e8 * 3.15569251e7 /
-          units_cgs_conversion_factor(us, UNIT_CONV_TIME) *
-          (cooling->dust_large_grainsize / 0.1) * (1.e-27 / rho_cgs) *
-          (pow(2.e6 / Tstream, 2.5) + 1.0);
+      const double tsp_l = 1.7e8 * 3.15569251e7 /
+                           units_cgs_conversion_factor(us, UNIT_CONV_TIME) *
+                           (cooling->dust_large_grainsize / 0.1) *
+                           (1.e-27 / rho_cgs) *
+                           (pow(2.e6 / Tstream, 2.5) + 1.0);
       const float M_l = dust_mass_new * (1.f - f_s);
       const float dM_l_to_s = M_l * (1.f - expf(-dt / tsp_l));
       const float new_M_s = dust_mass_new * f_s + dM_l_to_s;
@@ -1157,7 +1157,7 @@ __attribute__((always_inline)) INLINE void cooling_sputter_dust(
  * @param xp Pointer to the #xpart data.
  * @param dt The time-step of this particle.
  */
-__attribute__((always_inline)) INLINE void cooling_evolve_grain_size(
+static void cooling_evolve_grain_size(
     const struct unit_system *restrict us,
     const struct cosmology *restrict cosmo,
     const struct cooling_function_data *restrict cooling,
@@ -1173,12 +1173,12 @@ __attribute__((always_inline)) INLINE void cooling_evolve_grain_size(
 
   /* --- 1. Accretion: small grains grow past a_crit -> large bin --- */
   /* Accretion timescale (Eq. 7, Li+2021):
-   * t_accr = t_ref * (a/a_ref) * (rho_ref/rho_g) * (T_ref/T_g)^1/2 * (Z_ref/Z_g)
+   * t_accr = t_ref * (a/a_ref) * (rho_ref/rho_g) * (T_ref/T_g)^1/2 *
+   * (Z_ref/Z_g)
    */
   const double rho_cgs = hydro_get_physical_density(p, cosmo) *
                          units_cgs_conversion_factor(us, UNIT_CONV_DENSITY);
-  const float Z_gas =
-      chemistry_get_total_metal_mass_fraction_for_cooling(p);
+  const float Z_gas = chemistry_get_total_metal_mass_fraction_for_cooling(p);
 
   if (Z_gas > 0.f && rho_cgs > 0.) {
     const float u_phys = hydro_get_physical_internal_energy(p, xp, cosmo);
@@ -1190,18 +1190,17 @@ __attribute__((always_inline)) INLINE void cooling_evolve_grain_size(
 
     const double a_ref = 0.1;
     const double Z_sun = 0.0134;
-    const double time_to_sec =
-        units_cgs_conversion_factor(us, UNIT_CONV_TIME);
+    const double time_to_sec = units_cgs_conversion_factor(us, UNIT_CONV_TIME);
     const double Gyr_to_sec = 3.15569251e16;
 
-    /* Eq. 7, Li+2021: t = t_ref (a/a_ref) (rho_ref/rho) (T_ref/T)^1/2 (Z_ref/Z) */
+    /* Eq. 7, Li+2021: t = t_ref (a/a_ref) (rho_ref/rho) (T_ref/T)^1/2 (Z_ref/Z)
+     */
     const double tau_base =
         cooling->dust_growth_tauref * Gyr_to_sec / time_to_sec *
         (cooling->dust_growth_densref / rho_cgs) *
         sqrt(cooling->dust_growth_Tref / T_g) * (Z_sun / Z_gas);
 
-    const double tau_s =
-        tau_base * (cooling->dust_small_grainsize / a_ref);
+    const double tau_s = tau_base * (cooling->dust_small_grainsize / a_ref);
 
     const float dM_s_to_l = M_s * (1.f - expf(-min(dt / tau_s, 5.f)));
     M_s -= dM_s_to_l;
@@ -1233,8 +1232,7 @@ __attribute__((always_inline)) INLINE void cooling_evolve_grain_size(
   /* --- Update the small grain fraction --- */
   const float M_total = M_s + M_l;
   if (M_total > 0.f) {
-    p->cooling_data.dust_small_fraction =
-        fminf(fmaxf(M_s / M_total, 0.f), 1.f);
+    p->cooling_data.dust_small_fraction = fminf(fmaxf(M_s / M_total, 0.f), 1.f);
   }
 }
 
