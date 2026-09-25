@@ -306,6 +306,11 @@ __attribute__((always_inline)) INLINE static void feedback_reset_feedback(
     sp->feedback_data.delta_dust_mass[i] = 0.;
 #endif
   }
+#if COOLING_GRACKLE_MODE >= 2
+  for (int material = 0; material < KIARA_DUST_N_MATERIALS; ++material)
+    for (int bin = 0; bin < KIARA_DUST_N_BINS; ++bin)
+      sp->feedback_data.delta_dust_size_mass[material][bin] = 0.;
+#endif
   sp->feedback_data.total_metal_mass = 0.;
 
   /* Zero the energy to inject */

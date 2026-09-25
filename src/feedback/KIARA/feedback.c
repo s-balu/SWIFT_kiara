@@ -218,6 +218,29 @@ void feedback_dust_production_condensation(
       delta_metal_mass[k] -= sp->feedback_data.delta_dust_mass[k];
     }
   }
+
+  /* Split newly condensed carbon into carbonaceous grains and the remaining
+   * refractory dust into silicates.  The size-bin shape is a framework-side
+   * choice; Grackle continues to receive only the total dust and elemental
+   * dust densities. */
+  const double (*source_distribution)[KIARA_DUST_N_BINS] =
+      (star_age > 100.) ? fb_props->dust_size_distribution_AGB
+                        : fb_props->dust_size_distribution_SNII;
+  double carbon_dust =
+      sp->feedback_data.delta_dust_mass[chemistry_element_C];
+  double silicate_dust = 0.;
+  for (k = chemistry_element_He; k < chemistry_element_count; ++k) {
+    if (k != chemistry_element_C)
+      silicate_dust += sp->feedback_data.delta_dust_mass[k];
+  }
+  for (int material = 0; material < KIARA_DUST_N_MATERIALS; ++material) {
+    const double material_mass = (material == kiara_dust_carbonaceous)
+                                     ? carbon_dust
+                                     : silicate_dust;
+    for (int bin = 0; bin < KIARA_DUST_N_BINS; ++bin)
+      sp->feedback_data.delta_dust_size_mass[material][bin] =
+          material_mass * source_distribution[material][bin];
+  }
 }
 #endif
 
@@ -1794,6 +1817,24 @@ void feedback_props_init(struct feedback_props *fp,
 #if COOLING_GRACKLE_MODE >= 2
   fp->max_dust_fraction = parser_get_opt_param_double(
       params, "KIARAFeedback:max_dust_fraction", 0.9);
+  fp->dust_small_fraction_SNII = parser_get_opt_param_double(
+      params, "KIARAFeedback:dust_small_fraction_SNII", 0.005);
+  fp->dust_small_fraction_AGB = parser_get_opt_param_double(
+      params, "KIARAFeedback:dust_small_fraction_AGB", 0.27);
+  /* Default source distributions are flat in mass per logarithmic bin.  They
+   * are framework metadata only and are never passed to Grackle. */
+  for (int material = 0; material < KIARA_DUST_N_MATERIALS; ++material) {
+    for (int bin = 0; bin < KIARA_DUST_N_BINS; ++bin) {
+      const double sn_small = fmin(fmax(fp->dust_small_fraction_SNII, 0.f), 1.f);
+      const double agb_small = fmin(fmax(fp->dust_small_fraction_AGB, 0.f), 1.f);
+      fp->dust_size_distribution_SNII[material][bin] =
+          (bin == 0) ? sn_small : (1. - sn_small) /
+                                      (double)(KIARA_DUST_N_BINS - 1);
+      fp->dust_size_distribution_AGB[material][bin] =
+          (bin == 0) ? agb_small : (1. - agb_small) /
+                                      (double)(KIARA_DUST_N_BINS - 1);
+    }
+  }
   fp->SNe_smoothing_time_in_Myr = parser_get_opt_param_double(
       params, "KIARAFeedback:SNe_smoothing_time_in_Myr", 0.);
 #endif

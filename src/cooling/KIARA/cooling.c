@@ -55,6 +55,33 @@ extern chemistry_data *grackle_data;
 #include "star_formation.h"
 #include "units.h"
 
+#if COOLING_GRACKLE_MODE >= 2
+/* Keep framework-only grain-size state valid when loading legacy dust fields. */
+static void cooling_init_dust_distribution(struct part *p) {
+  if (p->cooling_data.dust_mass <= 0.f) {
+    kiara_dust_distribution_zero(p->cooling_data.dust_size_distribution);
+    return;
+  }
+  if (kiara_dust_distribution_sum(p->cooling_data.dust_size_distribution) >
+      0.f)
+    return;
+
+  const float dust_total = p->cooling_data.dust_mass_fraction[0];
+  const float f_carbon = dust_total > 0.f
+                             ? fminf(fmaxf(p->cooling_data.dust_mass_fraction[
+                                              chemistry_element_C] /
+                                              dust_total,
+                                          0.f),
+                                    1.f)
+                             : 0.5f;
+  const int last = KIARA_DUST_N_BINS - 1;
+  p->cooling_data.dust_size_distribution[kiara_dust_carbonaceous][last] =
+      f_carbon;
+  p->cooling_data.dust_size_distribution[kiara_dust_silicate][last] =
+      1.f - f_carbon;
+}
+#endif
+
 /**
  * @brief Common operations performed on the cooling function at a
  * given time-step or redshift. Predominantly used to read cooling tables
@@ -194,7 +221,8 @@ void cooling_first_init_part(const struct phys_const *restrict phys_const,
     p->cooling_data.dust_mass_fraction[i] = 0.f;
   }
 
-  p->cooling_data.dust_temperature = 0.f;
+    p->cooling_data.dust_temperature = 0.f;
+  kiara_dust_distribution_zero(p->cooling_data.dust_size_distribution);
 #endif
 }
 
@@ -604,6 +632,7 @@ void cooling_copy_from_grackle2(
         p->cooling_data.dust_mass_fraction[i] = 0.f;
       }
     }
+    cooling_init_dust_distribution(p);
   }
 }
 #else
@@ -808,9 +837,11 @@ __attribute__((always_inline)) INLINE void cooling_normalize_primordial_species(
   /* Normalize hydrogen species */
   float X_H = xp->cooling_data.HI_frac + xp->cooling_data.HII_frac;
 #if COOLING_GRACKLE_MODE >= 2
-  X_H += xp->cooling_data.H2I_frac + xp->cooling_data.H2II_frac + xp->cooling_data.HM_frac;
+  X_H += xp->cooling_data.H2I_frac + xp->cooling_data.H2II_frac +
+         xp->cooling_data.HM_frac;
 #endif
-  const float new_H_frac = p->chemistry_data.metal_mass_fraction[chemistry_element_H];
+  const float new_H_frac =
+      p->chemistry_data.metal_mass_fraction[chemistry_element_H];
   const float H_ratio = new_H_frac / X_H;
 
   xp->cooling_data.HI_frac *= H_ratio;
@@ -822,8 +853,10 @@ __attribute__((always_inline)) INLINE void cooling_normalize_primordial_species(
 #endif
 
   /* Normalize helium species */
-  float X_He = xp->cooling_data.HeI_frac + xp->cooling_data.HeII_frac + xp->cooling_data.HeIII_frac;
-  const float new_He_frac = p->chemistry_data.metal_mass_fraction[chemistry_element_He];
+  float X_He = xp->cooling_data.HeI_frac + xp->cooling_data.HeII_frac +
+               xp->cooling_data.HeIII_frac;
+  const float new_He_frac =
+      p->chemistry_data.metal_mass_fraction[chemistry_element_He];
   const float He_ratio = new_He_frac / X_He;
 
   xp->cooling_data.HeI_frac *= He_ratio;
@@ -831,8 +864,9 @@ __attribute__((always_inline)) INLINE void cooling_normalize_primordial_species(
   xp->cooling_data.HeIII_frac *= He_ratio;
 
   /* Recompute electron number density relative to total density */
-  xp->cooling_data.e_frac = xp->cooling_data.HII_frac + xp->cooling_data.HeII_frac +
-         2.f * xp->cooling_data.HeIII_frac;
+  xp->cooling_data.e_frac = xp->cooling_data.HII_frac +
+                            xp->cooling_data.HeII_frac +
+                            2.f * xp->cooling_data.HeIII_frac;
 }
 
 /**
@@ -869,7 +903,8 @@ gr_float cooling_grackle_driver(
   grackle_field_data data;
   // cooling_grackle_malloc_fields(&data, 1, cooling->chemistry.use_dust_evol);
 
-  /* Renomalize H,He species to account for any changes due to chemistry, stellar evol, etc */
+  /* Renomalize H,He species to account for any changes due to chemistry,
+   * stellar evol, etc */
   cooling_normalize_primordial_species(p, xp);
 
   /* load particle information from particle to grackle data */
@@ -1031,8 +1066,8 @@ __attribute__((always_inline)) INLINE void cooling_sputter_dust(
   /* Do dust destruction in stream particle */
   if (cooling->use_grackle_dust_evol && p->cooling_data.dust_mass > 0.f) {
     const float u_phys = hydro_get_physical_internal_energy(p, xp, cosmo);
-    const float Tstream =
-        cooling_convert_u_to_temp(u_phys, xp->cooling_data.e_frac, cooling, p, xp);
+    const float Tstream = cooling_convert_u_to_temp(
+        u_phys, xp->cooling_data.e_frac, cooling, p, xp);
     const double Tstream_K =
         Tstream * units_cgs_conversion_factor(us, UNIT_CONV_TEMPERATURE);
 
@@ -1041,10 +1076,26 @@ __attribute__((always_inline)) INLINE void cooling_sputter_dust(
       const double rho_cgs = hydro_get_physical_density(p, cosmo) *
                              units_cgs_conversion_factor(us, UNIT_CONV_DENSITY);
 
+      /* Effective radius of the framework distribution. */
+      double a_eff = 0., distribution_sum = 0.;
+      for (int material = 0; material < KIARA_DUST_N_MATERIALS; ++material)
+        for (int bin = 0; bin < KIARA_DUST_N_BINS; ++bin) {
+          const double weight =
+              p->cooling_data.dust_size_distribution[material][bin];
+          a_eff += weight * cooling->dust_grain_sizes[bin];
+          distribution_sum += weight;
+        }
+      if (distribution_sum <= 0.) {
+        cooling_init_dust_distribution(p);
+        a_eff = cooling->dust_grain_sizes[KIARA_DUST_N_BINS - 1];
+      } else {
+        a_eff /= distribution_sum;
+      }
+
       /* sputtering timescale, Tsai & Mathews (1995) */
       const double tsp = 1.7e8 * 3.15569251e7 /
                          units_cgs_conversion_factor(us, UNIT_CONV_TIME) *
-                         (cooling->dust_grainsize / 0.1) * (1.e-27 / rho_cgs) *
+                         (a_eff / 0.1) * (1.e-27 / rho_cgs) *
                          (pow(2.e6 / Tstream, 2.5) + 1.0);
 
       const float dust_mass_old = p->cooling_data.dust_mass;
@@ -1069,9 +1120,9 @@ __attribute__((always_inline)) INLINE void cooling_sputter_dust(
       const float dust_mass_ratio = dust_mass_new / dust_mass_old;
       p->chemistry_data.metal_mass_fraction_total = 0.f;
 
-      for (int elem = 0; elem < chemistry_element_count;
-           ++elem) {
-	if (elem == chemistry_element_H || elem == chemistry_element_He) continue;
+      for (int elem = 0; elem < chemistry_element_count; ++elem) {
+        if (elem == chemistry_element_H || elem == chemistry_element_He)
+          continue;
 
         const float Z_dust_elem_old = p->cooling_data.dust_mass_fraction[elem];
         const float Z_dust_elem_new = Z_dust_elem_old * dust_mass_ratio;
@@ -1111,8 +1162,125 @@ __attribute__((always_inline)) INLINE void cooling_sputter_dust(
             " particle id=%lld due to dust sputtering",
             p->id);
       }
+
+      /* Move a fraction of each bin to the immediately smaller bin as grains
+       * are sputtered below that bin's representative radius. */
+      for (int material = 0; material < KIARA_DUST_N_MATERIALS; ++material) {
+        for (int bin = KIARA_DUST_N_BINS - 1; bin > 0; --bin) {
+          const double tsp_bin = 1.7e8 * 3.15569251e7 /
+                                 units_cgs_conversion_factor(us, UNIT_CONV_TIME) *
+                                 (cooling->dust_grain_sizes[bin] / 0.1) *
+                                 (1.e-27 / rho_cgs) *
+                                 (pow(2.e6 / Tstream, 2.5) + 1.0);
+          const float old_bin =
+              p->cooling_data.dust_size_distribution[material][bin];
+          const float moved = old_bin * (1.f - expf(-dt / tsp_bin));
+          p->cooling_data.dust_size_distribution[material][bin] -= moved;
+          p->cooling_data.dust_size_distribution[material][bin - 1] += moved;
+        }
+      }
+      kiara_dust_distribution_normalize(
+          p->cooling_data.dust_size_distribution);
     }
   }
+}
+
+/**
+ * @brief Evolve the framework-side multi-bin dust grain size distribution.
+ *
+ * Implements growth toward larger bins and SN shock processing toward smaller
+ * bins.  The total dust mass and elemental depletion remain owned by Grackle.
+ * Sputtering redistribution is handled in cooling_sputter_dust().
+ *
+ * @param us The internal system of units.
+ * @param cosmo The current cosmological model.
+ * @param cooling The #cooling_function_data used in the run.
+ * @param p Pointer to the particle data.
+ * @param xp Pointer to the #xpart data.
+ * @param dt The time-step of this particle.
+ */
+static void cooling_evolve_grain_size(
+    const struct unit_system *restrict us,
+    const struct cosmology *restrict cosmo,
+    const struct cooling_function_data *restrict cooling,
+    struct part *restrict p, struct xpart *restrict xp, const double dt) {
+
+  if (!cooling->use_grackle_dust_evol || p->cooling_data.dust_mass <= 0.f)
+    return;
+
+  cooling_init_dust_distribution(p);
+
+  /* --- 1. Accretion: small grains grow past a_crit -> large bin --- */
+  /* Accretion timescale (Eq. 7, Li+2021):
+   * t_accr = t_ref * (a/a_ref) * (rho_ref/rho_g) * (T_ref/T_g)^1/2 *
+   * (Z_ref/Z_g)
+   */
+  const double rho_cgs = hydro_get_physical_density(p, cosmo) *
+                         units_cgs_conversion_factor(us, UNIT_CONV_DENSITY);
+  const float Z_gas = chemistry_get_total_metal_mass_fraction_for_cooling(p);
+
+  if (Z_gas > 0.f && rho_cgs > 0.) {
+    const float u_phys = hydro_get_physical_internal_energy(p, xp, cosmo);
+    const float T_gas = cooling_convert_u_to_temp(
+        u_phys, xp->cooling_data.e_frac, cooling, p, xp);
+    const double T_gas_K =
+        T_gas * units_cgs_conversion_factor(us, UNIT_CONV_TEMPERATURE);
+    const double T_g = fmax(T_gas_K, 10.);
+
+    const double a_ref = 0.1;
+    const double Z_sun = 0.0134;
+    const double time_to_sec = units_cgs_conversion_factor(us, UNIT_CONV_TIME);
+    const double Gyr_to_sec = 3.15569251e16;
+
+    /* Eq. 7, Li+2021: t = t_ref (a/a_ref) (rho_ref/rho) (T_ref/T)^1/2 (Z_ref/Z)
+     */
+    const double tau_base =
+        cooling->dust_growth_tauref * Gyr_to_sec / time_to_sec *
+        (cooling->dust_growth_densref / rho_cgs) *
+        sqrt(cooling->dust_growth_Tref / T_g) * (Z_sun / Z_gas);
+
+    for (int material = 0; material < KIARA_DUST_N_MATERIALS; ++material) {
+      for (int bin = 0; bin < KIARA_DUST_N_BINS - 1; ++bin) {
+        const double tau_bin =
+            tau_base * (cooling->dust_grain_sizes[bin] / a_ref);
+        const float old_bin =
+            p->cooling_data.dust_size_distribution[material][bin];
+        const float moved = old_bin * (1.f - expf(-min(dt / tau_bin, 5.f)));
+        p->cooling_data.dust_size_distribution[material][bin] -= moved;
+        p->cooling_data.dust_size_distribution[material][bin + 1] += moved;
+      }
+    }
+  }
+
+  /* --- 2. SN shock destruction: large grains shattered -> small bin --- */
+  /* Uses SNe_ThisTimeStep already tracked per particle.
+   * Swept mass from Sedov-Taylor (Eq. 14, Li+2021):
+   * M_s = 6800 * E_SN,51 * (v_s / 100 km/s)^-2  M_sun
+   */
+  if (p->cooling_data.SNe_ThisTimeStep > 0.f) {
+    const double M_gas = hydro_get_mass(p);
+    const double v_s = cooling->dust_sne_shockspeed;
+    const double M_swept_Msun = 6800.0 * 1.0 * pow(v_s / 100.0, -2.0);
+    const double Msun_to_code =
+        1.989e33 / units_cgs_conversion_factor(us, UNIT_CONV_MASS);
+    const double M_swept = M_swept_Msun * Msun_to_code;
+
+    const double N_SNe = p->cooling_data.SNe_ThisTimeStep * dt;
+    const double epsilon = cooling->dust_destruction_eff;
+    const float transfer_fraction =
+        fminf(epsilon * N_SNe * M_swept / M_gas, 0.5f);
+    for (int material = 0; material < KIARA_DUST_N_MATERIALS; ++material) {
+      for (int bin = KIARA_DUST_N_BINS - 1; bin > 0; --bin) {
+        const float moved =
+            p->cooling_data.dust_size_distribution[material][bin] *
+            transfer_fraction;
+        p->cooling_data.dust_size_distribution[material][bin] -= moved;
+        p->cooling_data.dust_size_distribution[material][bin - 1] += moved;
+      }
+    }
+  }
+
+  kiara_dust_distribution_normalize(p->cooling_data.dust_size_distribution);
 }
 
 /**
@@ -1169,6 +1337,7 @@ __attribute__((always_inline)) INLINE void firehose_cooling_and_dust(
 #endif
 
   cooling_sputter_dust(us, cosmo, cooling, p, xp, dt);
+  cooling_evolve_grain_size(us, cosmo, cooling, p, xp, dt);
 }
 
 /**
@@ -1198,6 +1367,8 @@ void cooling_init_chemistry(
        assuming solar abundance ratios*/
     p->chemistry_data.metal_mass_fraction_total = 0.f;
     p->cooling_data.dust_mass = 0.f;
+    kiara_dust_distribution_powerlaw(
+        p->cooling_data.dust_size_distribution);
     /* Offset index for the SolarAbundaces array (starts at He -> Fe) */
     int j = 1;
     for (int i = chemistry_element_C; i < chemistry_element_count; i++) {
@@ -1289,8 +1460,8 @@ void cooling_do_grackle_cooling(
   /* Compute the entropy floor */
   // const double T_warm = entropy_floor_temperature(p, cosmo, floor_props);
   const double T_warm = warm_ISM_temperature(p, cooling, phys_const, cosmo);
-  const double u_warm =
-      cooling_convert_temp_to_u(T_warm, xp->cooling_data.e_frac, cooling, p, xp);
+  const double u_warm = cooling_convert_temp_to_u(
+      T_warm, xp->cooling_data.e_frac, cooling, p, xp);
 
   /* Do grackle cooling */
   const float u_old = hydro_get_physical_internal_energy(p, xp, cosmo);
@@ -1324,10 +1495,11 @@ void cooling_do_grackle_cooling(
     /* If there is any dust outside of the ISM, sputter it
      * back into gas phase metals */
     cooling_sputter_dust(us, cosmo, cooling, p, xp, dt);
+    cooling_evolve_grain_size(us, cosmo, cooling, p, xp, dt);
   } else {
     /* Particle is in subgrid mode; result is stored in subgrid_temp */
-    p->cooling_data.subgrid_temp =
-        cooling_convert_u_to_temp(u_new, xp->cooling_data.e_frac, cooling, p, xp);
+    p->cooling_data.subgrid_temp = cooling_convert_u_to_temp(
+        u_new, xp->cooling_data.e_frac, cooling, p, xp);
 
     /* Set the subgrid cold ISM fraction for particle */
     /* Get H number density */
@@ -1384,6 +1556,9 @@ void cooling_do_grackle_cooling(
     const float u_part = p->cooling_data.subgrid_fcold * u_new +
                          (1. - p->cooling_data.subgrid_fcold) * u_warm;
     hydro_set_physical_internal_energy(p, xp, cosmo, u_part);
+
+    /* Evolve grain size distribution in the ISM */
+    cooling_evolve_grain_size(us, cosmo, cooling, p, xp, dt);
   } /* subgrid mode */
 
   /* Store the radiated energy */
@@ -1466,7 +1641,7 @@ void cooling_set_particle_subgrid_properties(
     struct xpart *xp) {
 
   /* No subgrid ISM if particle is decoupled */
-  if (p->decoupled  || p->feedback_data.cooling_shutoff_delay_time > 0.f) {
+  if (p->decoupled || p->feedback_data.cooling_shutoff_delay_time > 0.f) {
     /* Make sure these are always set for the wind particles */
     p->cooling_data.subgrid_dens = hydro_get_physical_density(p, cosmo);
     p->cooling_data.subgrid_temp = 0.;
@@ -1486,8 +1661,8 @@ void cooling_set_particle_subgrid_properties(
   /* Subgrid model is on if particle is in the Jeans EOS regime */
   const double T_warm = warm_ISM_temperature(p, cooling, phys_const, cosmo);
   // entropy_floor_gas_temperature( rho, rho_com, cosmo, floor_props);
-  const double u_warm =
-      cooling_convert_temp_to_u(T_warm, xp->cooling_data.e_frac, cooling, p, xp);
+  const double u_warm = cooling_convert_temp_to_u(
+      T_warm, xp->cooling_data.e_frac, cooling, p, xp);
 
   /* Check if it is in subgrid mode: Must be in Jeans EoS regime
    * and have nonzero cold gas */
@@ -1668,14 +1843,15 @@ void cooling_init_units(const struct unit_system *us,
 
   cooling->time_to_Myr = time_to_yr * 1.e-6;
 
-  const double vel_to_km_s =  units_cgs_conversion_factor(us, UNIT_CONV_VELOCITY) * 1.e-5;
+  const double vel_to_km_s =
+      units_cgs_conversion_factor(us, UNIT_CONV_VELOCITY) * 1.e-5;
   cooling->potential_to_kms2 = vel_to_km_s * vel_to_km_s;
   cooling->ff_const = sqrt(3. * M_PI / (32. * phys_const->const_newton_G));
 
   /* G0 for MW=1.6 (Parravano etal 2003).  */
   /* Scaled to SFR density in solar neighborhood =0.002 Mo/Gyr/pc^3
      (J. Isern 2019) */
-  //const float sfr_density_solar = 0.002f;
+  // const float sfr_density_solar = 0.002f;
   /* SFR within solar circle is 1.5 Mo/yr */
   const float sfr_density_solar = 0.066f;
   cooling->G0_factor1 = 1.6f * mass_to_solar_mass /

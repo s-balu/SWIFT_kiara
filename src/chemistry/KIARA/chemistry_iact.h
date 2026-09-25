@@ -564,6 +564,22 @@ __attribute__((always_inline)) INLINE static void firehose_evolve_particle_sym(
   chi->dm_dust += new_pi_dust_mass - pi_dust_mass;
   chj->dm_dust += new_pj_dust_mass - pj_dust_mass;
 
+  /* Spread every material/size bin between particles. */
+  for (int material = 0; material < KIARA_DUST_N_MATERIALS; ++material) {
+    for (int bin = 0; bin < KIARA_DUST_N_BINS; ++bin) {
+      const float pi_bin_mass = pi_dust_mass *
+          pi->cooling_data.dust_size_distribution[material][bin];
+      const float pj_bin_mass = pj_dust_mass *
+          pj->cooling_data.dust_size_distribution[material][bin];
+      const float new_pi_bin = pii_weight * pi_bin_mass +
+                               pji_weight * pj_bin_mass;
+      const float new_pj_bin = pji_weight * pi_bin_mass +
+                               pjj_weight * pj_bin_mass;
+      chi->dm_dust_size[material][bin] += new_pi_bin - pi_bin_mass;
+      chj->dm_dust_size[material][bin] += new_pj_bin - pj_bin_mass;
+    }
+  }
+
   /* Spread individual dust elements */
   for (int elem = 0; elem < chemistry_element_count; ++elem) {
     /* Exchange metals */

@@ -20,6 +20,8 @@
 #ifndef SWIFT_FEEDBACK_STRUCT_KIARA_H
 #define SWIFT_FEEDBACK_STRUCT_KIARA_H
 
+#include "chemistry/KIARA/dust.h"
+
 #include "chemistry_struct.h"
 
 /**
@@ -118,6 +120,9 @@ struct feedback_spart_data {
 
   /*! Total dust mass change for each element */
   double delta_dust_mass[chemistry_element_count];
+
+  /*! Dust mass from this event in every material and grain-size bin */
+  double delta_dust_size_mass[KIARA_DUST_N_MATERIALS][KIARA_DUST_N_BINS];
 #endif
 
   /*! Initial stream radius for firehose model */
