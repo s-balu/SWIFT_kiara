@@ -778,16 +778,21 @@ feedback_do_chemical_enrichment_of_gas_around_star(
       pj->cooling_data.dust_mass_fraction[elem] *= dust_mass_inv;
     }
 
-    /* Update small grain fraction (mass-weighted average of existing
-     * and newly deposited dust) */
-    const double old_small_mass =
-        old_dust_mass * pj->cooling_data.dust_small_fraction;
-    const double new_small_mass =
-        si->feedback_data.delta_dust_small_mass * Omega_frac;
-    pj->cooling_data.dust_small_fraction =
-        (float)((old_small_mass + new_small_mass) * dust_mass_inv);
-    pj->cooling_data.dust_small_fraction =
-        fminf(fmaxf(pj->cooling_data.dust_small_fraction, 0.f), 1.f);
+    /* Update the material/size distribution by mass-weighting existing dust
+     * with the newly deposited ejecta. */
+    for (int material = 0; material < KIARA_DUST_N_MATERIALS; ++material) {
+      for (int bin = 0; bin < KIARA_DUST_N_BINS; ++bin) {
+        const double old_bin_mass =
+            old_dust_mass *
+            pj->cooling_data.dust_size_distribution[material][bin];
+        const double new_bin_mass =
+            si->feedback_data.delta_dust_size_mass[material][bin] *
+            Omega_frac;
+        pj->cooling_data.dust_size_distribution[material][bin] =
+            (old_bin_mass + new_bin_mass) * dust_mass_inv;
+      }
+    }
+    kiara_dust_distribution_normalize(pj->cooling_data.dust_size_distribution);
 
     /* Check for inconsistency */
     if (pj->cooling_data.dust_mass > pj->mass) {
@@ -807,7 +812,7 @@ feedback_do_chemical_enrichment_of_gas_around_star(
     for (int elem = 0; elem < chemistry_element_count; elem++) {
       pj->cooling_data.dust_mass_fraction[elem] = 0.f;
     }
-    pj->cooling_data.dust_small_fraction = 0.f;
+    kiara_dust_distribution_zero(pj->cooling_data.dust_size_distribution);
   }
 }
 

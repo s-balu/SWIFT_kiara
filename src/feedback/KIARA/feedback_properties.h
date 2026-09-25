@@ -26,6 +26,7 @@
 /* Local includes. */
 #include "chemistry.h"
 #include "hydro_properties.h"
+#include "chemistry/KIARA/dust.h"
 
 #define NM 5000
 #define NZSN 7
@@ -375,6 +376,12 @@ struct feedback_props {
   /*! Fraction of newly produced dust in small grains (two-size model) */
   float dust_small_fraction_SNII;
   float dust_small_fraction_AGB;
+
+  /*! Normalized source distributions for SNII and AGB dust. */
+  double dust_size_distribution_SNII[KIARA_DUST_N_MATERIALS]
+                                    [KIARA_DUST_N_BINS];
+  double dust_size_distribution_AGB[KIARA_DUST_N_MATERIALS]
+                                   [KIARA_DUST_N_BINS];
 
   /*! Rolling value for number of SNe is smoothed over this timescale
    * in Myr (0 for instantaneous) */

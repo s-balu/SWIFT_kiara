@@ -19,6 +19,8 @@
 #ifndef SWIFT_COOLING_STRUCT_KIARA_H
 #define SWIFT_COOLING_STRUCT_KIARA_H
 
+#include "chemistry/KIARA/dust.h"
+
 /**
  *  * @brief Properties of the cooling stored in the #part data.
  *   */
@@ -39,8 +41,10 @@ struct cooling_part_data {
   /* Total mass in dust */
   float dust_mass;  // total mass in dust
 
-  /* Fraction of dust mass in small grains (a < a_crit, two-size model) */
-  float dust_small_fraction;
+  /*! Fraction of total dust mass in each material and grain-size bin.
+   * The first index is #kiara_dust_material and the second increases with
+   * grain radius.  All entries together sum to unity when dust is present. */
+  float dust_size_distribution[KIARA_DUST_N_MATERIALS][KIARA_DUST_N_BINS];
 
   /* Fraction of each metal in dust */
   float dust_mass_fraction[chemistry_element_count];

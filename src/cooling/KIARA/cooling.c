@@ -55,6 +55,33 @@ extern chemistry_data *grackle_data;
 #include "star_formation.h"
 #include "units.h"
 
+#if COOLING_GRACKLE_MODE >= 2
+/* Keep framework-only grain-size state valid when loading legacy dust fields. */
+static void cooling_init_dust_distribution(struct part *p) {
+  if (p->cooling_data.dust_mass <= 0.f) {
+    kiara_dust_distribution_zero(p->cooling_data.dust_size_distribution);
+    return;
+  }
+  if (kiara_dust_distribution_sum(p->cooling_data.dust_size_distribution) >
+      0.f)
+    return;
+
+  const float dust_total = p->cooling_data.dust_mass_fraction[0];
+  const float f_carbon = dust_total > 0.f
+                             ? fminf(fmaxf(p->cooling_data.dust_mass_fraction[
+                                              chemistry_element_C] /
+                                              dust_total,
+                                          0.f),
+                                    1.f)
+                             : 0.5f;
+  const int last = KIARA_DUST_N_BINS - 1;
+  p->cooling_data.dust_size_distribution[kiara_dust_carbonaceous][last] =
+      f_carbon;
+  p->cooling_data.dust_size_distribution[kiara_dust_silicate][last] =
+      1.f - f_carbon;
+}
+#endif
+
 /**
  * @brief Common operations performed on the cooling function at a
  * given time-step or redshift. Predominantly used to read cooling tables
@@ -194,8 +221,8 @@ void cooling_first_init_part(const struct phys_const *restrict phys_const,
     p->cooling_data.dust_mass_fraction[i] = 0.f;
   }
 
-  p->cooling_data.dust_temperature = 0.f;
-  p->cooling_data.dust_small_fraction = 0.5f;
+    p->cooling_data.dust_temperature = 0.f;
+  kiara_dust_distribution_zero(p->cooling_data.dust_size_distribution);
 #endif
 }
 
@@ -605,6 +632,7 @@ void cooling_copy_from_grackle2(
         p->cooling_data.dust_mass_fraction[i] = 0.f;
       }
     }
+    cooling_init_dust_distribution(p);
   }
 }
 #else
@@ -1048,10 +1076,21 @@ __attribute__((always_inline)) INLINE void cooling_sputter_dust(
       const double rho_cgs = hydro_get_physical_density(p, cosmo) *
                              units_cgs_conversion_factor(us, UNIT_CONV_DENSITY);
 
-      /* Effective grain size from two-size model */
-      const float f_s = p->cooling_data.dust_small_fraction;
-      const double a_eff = f_s * cooling->dust_small_grainsize +
-                           (1.f - f_s) * cooling->dust_large_grainsize;
+      /* Effective radius of the framework distribution. */
+      double a_eff = 0., distribution_sum = 0.;
+      for (int material = 0; material < KIARA_DUST_N_MATERIALS; ++material)
+        for (int bin = 0; bin < KIARA_DUST_N_BINS; ++bin) {
+          const double weight =
+              p->cooling_data.dust_size_distribution[material][bin];
+          a_eff += weight * cooling->dust_grain_sizes[bin];
+          distribution_sum += weight;
+        }
+      if (distribution_sum <= 0.) {
+        cooling_init_dust_distribution(p);
+        a_eff = cooling->dust_grain_sizes[KIARA_DUST_N_BINS - 1];
+      } else {
+        a_eff /= distribution_sum;
+      }
 
       /* sputtering timescale, Tsai & Mathews (1995) */
       const double tsp = 1.7e8 * 3.15569251e7 /
@@ -1124,30 +1163,33 @@ __attribute__((always_inline)) INLINE void cooling_sputter_dust(
             p->id);
       }
 
-      /* Sputtering redistribution: large grains shrink toward small bin.
-       * Timescale for large grains to shrink below a_crit is
-       * t_sp,l (Eq. 12 of Li+2021) */
-      const double tsp_l = 1.7e8 * 3.15569251e7 /
-                           units_cgs_conversion_factor(us, UNIT_CONV_TIME) *
-                           (cooling->dust_large_grainsize / 0.1) *
-                           (1.e-27 / rho_cgs) *
-                           (pow(2.e6 / Tstream, 2.5) + 1.0);
-      const float M_l = dust_mass_new * (1.f - f_s);
-      const float dM_l_to_s = M_l * (1.f - expf(-dt / tsp_l));
-      const float new_M_s = dust_mass_new * f_s + dM_l_to_s;
-      if (dust_mass_new > 0.f) {
-        p->cooling_data.dust_small_fraction =
-            fminf(fmaxf(new_M_s / dust_mass_new, 0.f), 1.f);
+      /* Move a fraction of each bin to the immediately smaller bin as grains
+       * are sputtered below that bin's representative radius. */
+      for (int material = 0; material < KIARA_DUST_N_MATERIALS; ++material) {
+        for (int bin = KIARA_DUST_N_BINS - 1; bin > 0; --bin) {
+          const double tsp_bin = 1.7e8 * 3.15569251e7 /
+                                 units_cgs_conversion_factor(us, UNIT_CONV_TIME) *
+                                 (cooling->dust_grain_sizes[bin] / 0.1) *
+                                 (1.e-27 / rho_cgs) *
+                                 (pow(2.e6 / Tstream, 2.5) + 1.0);
+          const float old_bin =
+              p->cooling_data.dust_size_distribution[material][bin];
+          const float moved = old_bin * (1.f - expf(-dt / tsp_bin));
+          p->cooling_data.dust_size_distribution[material][bin] -= moved;
+          p->cooling_data.dust_size_distribution[material][bin - 1] += moved;
+        }
       }
+      kiara_dust_distribution_normalize(
+          p->cooling_data.dust_size_distribution);
     }
   }
 }
 
 /**
- * @brief Evolve dust grain size distribution using the two-size model.
+ * @brief Evolve the framework-side multi-bin dust grain size distribution.
  *
- * Implements accretion (small->large) and SN shock destruction (large->small)
- * following Li et al. (2021) and Hirashita (2015).
+ * Implements growth toward larger bins and SN shock processing toward smaller
+ * bins.  The total dust mass and elemental depletion remain owned by Grackle.
  * Sputtering redistribution is handled in cooling_sputter_dust().
  *
  * @param us The internal system of units.
@@ -1166,10 +1208,7 @@ static void cooling_evolve_grain_size(
   if (!cooling->use_grackle_dust_evol || p->cooling_data.dust_mass <= 0.f)
     return;
 
-  const float M_dust = p->cooling_data.dust_mass;
-  float f_s = p->cooling_data.dust_small_fraction;
-  float M_s = M_dust * f_s;
-  float M_l = M_dust * (1.f - f_s);
+  cooling_init_dust_distribution(p);
 
   /* --- 1. Accretion: small grains grow past a_crit -> large bin --- */
   /* Accretion timescale (Eq. 7, Li+2021):
@@ -1200,11 +1239,17 @@ static void cooling_evolve_grain_size(
         (cooling->dust_growth_densref / rho_cgs) *
         sqrt(cooling->dust_growth_Tref / T_g) * (Z_sun / Z_gas);
 
-    const double tau_s = tau_base * (cooling->dust_small_grainsize / a_ref);
-
-    const float dM_s_to_l = M_s * (1.f - expf(-min(dt / tau_s, 5.f)));
-    M_s -= dM_s_to_l;
-    M_l += dM_s_to_l;
+    for (int material = 0; material < KIARA_DUST_N_MATERIALS; ++material) {
+      for (int bin = 0; bin < KIARA_DUST_N_BINS - 1; ++bin) {
+        const double tau_bin =
+            tau_base * (cooling->dust_grain_sizes[bin] / a_ref);
+        const float old_bin =
+            p->cooling_data.dust_size_distribution[material][bin];
+        const float moved = old_bin * (1.f - expf(-min(dt / tau_bin, 5.f)));
+        p->cooling_data.dust_size_distribution[material][bin] -= moved;
+        p->cooling_data.dust_size_distribution[material][bin + 1] += moved;
+      }
+    }
   }
 
   /* --- 2. SN shock destruction: large grains shattered -> small bin --- */
@@ -1222,18 +1267,20 @@ static void cooling_evolve_grain_size(
 
     const double N_SNe = p->cooling_data.SNe_ThisTimeStep * dt;
     const double epsilon = cooling->dust_destruction_eff;
-    const float dM_l_to_s =
-        M_l * fminf(epsilon * N_SNe * M_swept / M_gas, 0.5f);
-
-    M_s += dM_l_to_s;
-    M_l -= dM_l_to_s;
+    const float transfer_fraction =
+        fminf(epsilon * N_SNe * M_swept / M_gas, 0.5f);
+    for (int material = 0; material < KIARA_DUST_N_MATERIALS; ++material) {
+      for (int bin = KIARA_DUST_N_BINS - 1; bin > 0; --bin) {
+        const float moved =
+            p->cooling_data.dust_size_distribution[material][bin] *
+            transfer_fraction;
+        p->cooling_data.dust_size_distribution[material][bin] -= moved;
+        p->cooling_data.dust_size_distribution[material][bin - 1] += moved;
+      }
+    }
   }
 
-  /* --- Update the small grain fraction --- */
-  const float M_total = M_s + M_l;
-  if (M_total > 0.f) {
-    p->cooling_data.dust_small_fraction = fminf(fmaxf(M_s / M_total, 0.f), 1.f);
-  }
+  kiara_dust_distribution_normalize(p->cooling_data.dust_size_distribution);
 }
 
 /**
@@ -1320,7 +1367,8 @@ void cooling_init_chemistry(
        assuming solar abundance ratios*/
     p->chemistry_data.metal_mass_fraction_total = 0.f;
     p->cooling_data.dust_mass = 0.f;
-    p->cooling_data.dust_small_fraction = 0.5f;
+    kiara_dust_distribution_powerlaw(
+        p->cooling_data.dust_size_distribution);
     /* Offset index for the SolarAbundaces array (starts at He -> Fe) */
     int j = 1;
     for (int i = chemistry_element_C; i < chemistry_element_count; i++) {

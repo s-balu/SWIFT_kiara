@@ -50,6 +50,16 @@ __attribute__((always_inline)) INLINE static void cooling_write_flavour(
 #else
   error("This function should be called only with one of the Grackle cooling.");
 #endif
+
+#if COOLING_GRACKLE_MODE >= 2
+  io_write_attribute_i(h_grp, "KIARA dust materials",
+                       KIARA_DUST_N_MATERIALS);
+  io_write_attribute_i(h_grp, "KIARA dust size bins per material",
+                       KIARA_DUST_N_BINS);
+  io_write_attribute(h_grp, "KIARA dust grain-size bin centres [micron]",
+                     DOUBLE, cooling->dust_grain_sizes,
+                     KIARA_DUST_N_BINS);
+#endif
 }
 #endif
 
@@ -127,6 +137,26 @@ INLINE static void convert_part_G0(const struct engine *e, const struct part *p,
   const float rho = p->cooling_data.subgrid_dens;
   *ret = cooling_compute_G0(p, rho, e->cooling_func, mstar, ssfr);
 }
+
+#if COOLING_GRACKLE_MODE >= 2
+INLINE static void convert_part_carbonaceous_dust_bin_masses(
+    const struct engine *e, const struct part *p, const struct xpart *xp,
+    float *ret) {
+  for (int bin = 0; bin < KIARA_DUST_N_BINS; ++bin)
+    ret[bin] = p->cooling_data.dust_mass *
+               p->cooling_data
+                   .dust_size_distribution[kiara_dust_carbonaceous][bin];
+}
+
+INLINE static void convert_part_silicate_dust_bin_masses(
+    const struct engine *e, const struct part *p, const struct xpart *xp,
+    float *ret) {
+  for (int bin = 0; bin < KIARA_DUST_N_BINS; ++bin)
+    ret[bin] = p->cooling_data.dust_mass *
+               p->cooling_data.dust_size_distribution[kiara_dust_silicate]
+                                                        [bin];
+}
+#endif
 
 /**
  * @brief Specifies which particle fields to write to a dataset
@@ -224,10 +254,18 @@ __attribute__((always_inline)) INLINE static int cooling_write_particles(
                            "Dust temperatures in subgrid ISM dust model.");
   num++;
 
-  list[num] = io_make_output_field(
-      "DustSmallGrainFraction", FLOAT, 1, UNIT_CONV_NO_UNITS, 0.f, parts,
-      cooling_data.dust_small_fraction,
-      "Fraction of dust mass in small grains (a < a_crit) in the two-size model.");
+  list[num] = io_make_output_field_convert_part(
+      "CarbonaceousDustBinMasses", FLOAT, KIARA_DUST_N_BINS, UNIT_CONV_MASS,
+      0.f, parts, xparts, convert_part_carbonaceous_dust_bin_masses,
+      "Carbonaceous dust mass in each grain-size bin; bin centres are stored "
+      "in the CoolingScheme metadata.");
+  num++;
+
+  list[num] = io_make_output_field_convert_part(
+      "SilicateDustBinMasses", FLOAT, KIARA_DUST_N_BINS, UNIT_CONV_MASS, 0.f,
+      parts, xparts, convert_part_silicate_dust_bin_masses,
+      "Silicate dust mass in each grain-size bin; bin centres are stored in "
+      "the CoolingScheme metadata.");
   num++;
 
   list[num] = io_make_output_field(
@@ -350,6 +388,25 @@ __attribute__((always_inline)) INLINE static void cooling_read_parameters(
 
   cooling->dust_small_fraction_AGB = parser_get_opt_param_double(
       parameter_file, "KIARACooling:dust_small_fraction_AGB", 0.27);
+
+  /* Logarithmic defaults between the legacy small and large radii. */
+  const double log_a_min = log(cooling->dust_small_grainsize);
+  const double log_a_max = log(cooling->dust_large_grainsize);
+  for (int bin = 0; bin < KIARA_DUST_N_BINS; ++bin) {
+    const double x = (double)bin / (double)(KIARA_DUST_N_BINS - 1);
+    cooling->dust_grain_sizes[bin] = exp(log_a_min + x * (log_a_max - log_a_min));
+  }
+  parser_get_opt_param_double_array(parameter_file,
+                                    "KIARACooling:dust_grain_sizes_micron",
+                                    KIARA_DUST_N_BINS,
+                                    cooling->dust_grain_sizes);
+  for (int bin = 0; bin < KIARA_DUST_N_BINS; ++bin) {
+    if (cooling->dust_grain_sizes[bin] <= 0.)
+      error("KIARACooling:dust_grain_sizes_micron entries must be positive");
+    if (bin > 0 && cooling->dust_grain_sizes[bin] <=
+                       cooling->dust_grain_sizes[bin - 1])
+      error("KIARACooling:dust_grain_sizes_micron must be strictly increasing");
+  }
 
   cooling->cold_ISM_frac = parser_get_opt_param_double(
       parameter_file, "KIARACooling:cold_ISM_frac", 1.0);
