@@ -124,9 +124,8 @@ struct black_holes_props {
   /*! Where do we distinguish between cold gas for torque accretion? */
   float cold_gas_temperature_cut;
 
-  /*! Number of dynamical times over which gas is accreted from accretion disk
-   */
-  float dynamical_time_factor;
+  /*! Inverse of number of dynamical times over which gas is accreted from accretion disk */
+  float inverse_dynamical_time_factor;
 
   /*! Max dynamical time over which gas is accreted from accretion disk */
   float dynamical_time_max;
@@ -574,8 +573,14 @@ INLINE static void black_holes_props_init(struct black_holes_props *bp,
   bp->environment_temperature_cut *= T_K_to_int;
   bp->cold_gas_temperature_cut *= T_K_to_int;
 
-  bp->dynamical_time_factor = parser_get_opt_param_float(
-      params, "ObsidianAGN:dynamical_time_factor", 1.f);
+  bp->inverse_dynamical_time_factor = parser_get_opt_param_float(
+      params, "ObsidianAGN:dynamical_time_factor", 0.f);
+  if (bp->inverse_dynamical_time_factor > 0.f) {
+    bp->inverse_dynamical_time_factor = 1.f / bp->inverse_dynamical_time_factor;
+  }
+  else {
+    bp->inverse_dynamical_time_factor = -1.f;
+  }
 
   bp->dynamical_time_max = parser_get_opt_param_float(
       params, "ObsidianAGN:dynamical_time_max_in_Myr", 0.f);
@@ -763,9 +768,14 @@ INLINE static void black_holes_props_init(struct black_holes_props *bp,
 
   bp->lum_thresh_always_jet = parser_get_opt_param_float(
       params, "ObsidianAGN:lum_thresh_always_jet_1e45_erg_s", 0.f);
-  bp->lum_thresh_always_jet *=
+  if (bp->lum_thresh_always_jet == 0.f) {
+    bp->lum_thresh_always_jet = FLT_MAX;
+  }
+  else {
+    bp->lum_thresh_always_jet *=
       1.e45 * units_cgs_conversion_factor(us, UNIT_CONV_TIME) /
       units_cgs_conversion_factor(us, UNIT_CONV_ENERGY);
+  }
 
   /* We need to keep epsilon_r continuous over all M_dot,BH/M_dot,Edd */
   bp->epsilon_r = eta_at_slim_disk_boundary;
@@ -777,11 +787,6 @@ INLINE static void black_holes_props_init(struct black_holes_props *bp,
       parser_get_opt_param_float(params, "ObsidianAGN:adaf_z_scaling", 0.f);
   bp->quasar_coupling =
       parser_get_param_float(params, "ObsidianAGN:quasar_coupling");
-  bp->quasar_luminosity_thresh = parser_get_opt_param_float(
-      params, "ObsidianAGN:quasar_lum_thresh_1e45_erg_s", 0.f);
-  bp->quasar_luminosity_thresh *=
-      units_cgs_conversion_factor(us, UNIT_CONV_TIME) /
-      units_cgs_conversion_factor(us, UNIT_CONV_ENERGY) * 1.e45;
   bp->slim_disk_coupling = parser_get_opt_param_float(
       params, "ObsidianAGN:slim_disk_coupling", bp->quasar_coupling);
 
@@ -863,6 +868,9 @@ INLINE static void black_holes_props_init(struct black_holes_props *bp,
 
   bp->adaf_wind_dir = parser_get_param_int(params, "ObsidianAGN:adaf_wind_dir");
 
+  bp->adaf_decouple_time_factor = parser_get_opt_param_float(
+      params, "ObsidianAGN:adaf_decouple_time_factor", 0.f);
+
   float jet_subgrid_mass_loading =
       2.f * bp->jet_efficiency *
       (phys_const->const_speed_light_c / bp->jet_subgrid_velocity) *
@@ -938,8 +946,6 @@ INLINE static void black_holes_props_init(struct black_holes_props *bp,
   }
 
   /* Do not decouple the ADAF winds */
-  bp->adaf_decouple_time_factor = 0.;
-
   bp->adaf_maximum_temperature = parser_get_opt_param_float(
       params, "ObsidianAGN:adaf_maximum_temperature_K", 5.e7f);
   bp->adaf_maximum_temperature *= T_K_to_int;
@@ -1222,7 +1228,7 @@ black_hole_compute_jet_velocity(const struct bpart *bi,
     }
     if (props->jet_velocity_scaling_with_BH_mass > 0.f) {
       float BH_mass_scaled =
-          bi->subgrid_mass * props->mass_to_solar_mass * 1.0e-8;
+          bi->subgrid_mass * props->mass_to_solar_mass * 1.0e-9;
       BH_mass_scaled = fmax(BH_mass_scaled, 1.f);
       jet_velocity *=
           powf(BH_mass_scaled, props->jet_velocity_scaling_with_BH_mass);

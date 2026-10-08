@@ -95,10 +95,10 @@ struct sink {
     union {
 
       /*! Birth time */
-      float time;
+      double time;
 
       /*! Birth scale factor */
-      float scale_factor;
+      double scale_factor;
     };
 
     /*! The birth density */
@@ -118,6 +118,9 @@ struct sink {
 
     /*! Density of the gas surrounding the sink. */
     float rho_gas;
+
+    /*! Smoothed internal_energy of the gas surrounding the sink. */
+    float internal_energy_gas;
 
     /*! Smoothed sound speed of the gas surrounding the sink. */
     float sound_speed_gas;
