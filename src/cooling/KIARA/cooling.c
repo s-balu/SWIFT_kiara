@@ -1300,7 +1300,7 @@ static void cooling_evolve_grain_size(
    * Swept mass from Sedov-Taylor (Eq. 14, Li+2021):
    * M_s = 6800 * E_SN,51 * (v_s / 100 km/s)^-2  M_sun
    */
-  if (p->cooling_data.SNe_ThisTimeStep > 0.f) {
+  if (p->feedback_data.SNe_ThisTimeStep > 0.f) {
     const double M_gas = hydro_get_mass(p);
     const double v_s = cooling->dust_sne_shockspeed;
     const double M_swept_Msun = 6800.0 * 1.0 * pow(v_s / 100.0, -2.0);
@@ -1308,7 +1308,7 @@ static void cooling_evolve_grain_size(
         1.989e33 / units_cgs_conversion_factor(us, UNIT_CONV_MASS);
     const double M_swept = M_swept_Msun * Msun_to_code;
 
-    const double N_SNe = p->cooling_data.SNe_ThisTimeStep * dt;
+    const double N_SNe = p->feedback_data.SNe_ThisTimeStep * dt;
     const double epsilon = cooling->dust_destruction_eff;
     const float transfer_fraction =
         fminf(epsilon * N_SNe * M_swept / M_gas, 0.5f);
