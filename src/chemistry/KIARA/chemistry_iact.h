@@ -655,7 +655,7 @@ __attribute__((always_inline)) INLINE static void firehose_evolve_particle_sym(
           pj->cooling_data.dust_size_distribution[material][bin];
       const float new_pi_bin = pii_weight * pi_bin_mass +
                                pji_weight * pj_bin_mass;
-      const float new_pj_bin = pji_weight * pi_bin_mass +
+      const float new_pj_bin = pij_weight * pi_bin_mass +
                                pjj_weight * pj_bin_mass;
       chi->dm_dust_size[material][bin] += new_pi_bin - pi_bin_mass;
       chj->dm_dust_size[material][bin] += new_pj_bin - pj_bin_mass;
