@@ -796,6 +796,11 @@ __attribute__((always_inline)) INLINE static void feedback_prepare_feedback(
       sp->feedback_data.delta_dust_mass[elem] *= ejecta_scale;
 #endif
     }
+#if COOLING_GRACKLE_MODE >= 2
+    for (int material = 0; material < KIARA_DUST_N_MATERIALS; ++material)
+      for (int bin = 0; bin < KIARA_DUST_N_BINS; ++bin)
+        sp->feedback_data.delta_dust_size_mass[material][bin] *= ejecta_scale;
+#endif
   }
 
   /* Compute the total mass to distribute */
