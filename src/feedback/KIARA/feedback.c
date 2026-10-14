@@ -30,10 +30,6 @@
 
 #if COOLING_GRACKLE_MODE >= 2
 
-/* This seems to be needed to get N_SNe and mass loss rates
- * correct in chem5 Kroupa/Chabrier. Not sure why. */
-#define IMF_FUDGE_FACTOR 1.0f
-
 /**
  * @brief Return log10 of the Habing band luminosity for a given star
  *        based on its age and metallicity, in erg/s
@@ -253,7 +249,8 @@ void feedback_dust_production_condensation(
  *        the ejected mass, metals, and unprocessed materials.
  *
  * @param sp The #spart to consider.
- * @param age The stellar age in code units.
+ * @param age The stellar age at the end of the enrichment step, in code units
+ * (the ejecta are those of the stars that die over [age - dt, age]).
  * @param fb_props The feedback properties.
  * @param dt The current timestep.
  * @param ejecta_energy The total ejected energy in code units.
@@ -607,7 +604,8 @@ void feedback_get_ejecta_from_star_particle(
   *ejecta_mass = max(0., sp->mass_init * SNII_E);
 
   /* For some reason at the first step this might happen */
-  if (isnan(SNII_U) || isnan(SNII_E)) {
+  if (!feedback_double_is_finite(SNII_U) ||
+      !feedback_double_is_finite(SNII_E)) {
     warning("SNII_U or SNII_E is NaN, j1=%d l1=%d z=%g mturn=%g %g age=%g", j1,
             l1, z, tm1, tm2, age);
     *ejecta_unprocessed = *ejecta_mass = 0.;
@@ -625,10 +623,8 @@ void feedback_get_ejecta_from_star_particle(
         *ejecta_energy = SWn * fb_props->E_sw * pow(z / fb_props->Z_mf, 0.8);
       }
 
-      /* Needed for dust model within Grackle; for now treat PopIII SNe
-       * same as PopI/II
-       */
-      *N_SNe = SWn;
+      /* Only stars above M_u2 die here; they collapse directly to black
+       * holes, so they are not counted as SNe */
     }
   } else {
     if (tm2 > fb_props->M_l2 || fb_first == 1) {
@@ -640,10 +636,10 @@ void feedback_get_ejecta_from_star_particle(
         *ejecta_energy = SWn * fb_props->E_sw;
         *ejecta_energy += sp->mass_init * SNII_ENE;
       }
-      /* Needed for dust model within Grackle; for now
-       * treat PopIII SNe same as PopI/II
-       */
-      *N_SNe = SNn + SWn;
+      /* Number of SNII (stars of M_l2-M_u2; SW_R counts all stars above
+       * M_l2, which would count these twice). Used for the wind energy and
+       * the dust model within Grackle. */
+      *N_SNe = SNn;
     }
 
     for (k = 0; k < chem5_element_count; k++) {
@@ -1239,13 +1235,13 @@ void feedback_prepare_interpolation_tables(
 
     if (fb_props->imf == 1) { /* Chabrier */
       if (m[i] <= fb_props->M_u) {
-        imf[1][i] = IMF_FUDGE_FACTOR * feedback_imf(fb_props, m[i]);
+        imf[1][i] = feedback_imf(fb_props, m[i]);
       } else {
         imf[1][i] = 0.;
       }
     } else { /* Kroupa/else */
       if (m[i] <= fb_props->M_u) {
-        imf[1][i] = IMF_FUDGE_FACTOR * feedback_imf(fb_props, m[i]) * norm;
+        imf[1][i] = feedback_imf(fb_props, m[i]) * norm;
       } else {
         imf[1][i] = 0.;
       }
@@ -1284,6 +1280,15 @@ void feedback_prepare_interpolation_tables(
       if (sniilm[j] < fb_props->tables.SNLM[i]) break;
     }
 
+    /* Evaluate the yield fractions within the tabulated masses (0.05-40
+     * Msun): above the most massive tabulated star, keep its fractional
+     * yields rather than extrapolating in log m, which drives the ejected
+     * fraction to zero while the unprocessed fraction keeps growing. */
+    const double lm_hi =
+        fmin(fmax(fb_props->tables.SNLM[i], sniilm[NMSN - 1]), sniilm[0]);
+    const double lm_lo =
+        fmin(fmax(fb_props->tables.SNLM[i - 1], sniilm[NMSN - 1]), sniilm[0]);
+
     /* For this mass, loop over metallicity values */
     for (l = 0; l < NZSN; l++) {
       if (l == 0) {
@@ -1308,14 +1313,17 @@ void feedback_prepare_interpolation_tables(
       }
 
       /* This is where we integrate up the IMF */
-      if (m[i] > m_l) { /* H/He change from stars that go SN */
+      /* Unprocessed and total ejected mass. Stars above M_u2 collapse
+       * directly to black holes and eject nothing, as for the metals below,
+       * so that ejected = unprocessed + sum of the element yields. */
+      if (m[i] > m_l && m[i] < fb_props->M_u2) {
         for (k = 1; k < 3; k++) {
           snii2_hi =
               LINEAR_INTERPOLATION(sniilm[j1], snii[k][l][j1], sniilm[j2],
-                                   snii[k][l][j2], fb_props->tables.SNLM[i]);
+                                   snii[k][l][j2], lm_hi);
           snii2_lo = LINEAR_INTERPOLATION(sniilm[j1], snii[k][l][j1],
                                           sniilm[j2], snii[k][l][j2],
-                                          fb_props->tables.SNLM[i - 1]);
+                                          lm_lo);
           if (snii2_hi < 0.) snii2_hi = 0.;
           if (snii2_lo < 0.) snii2_lo = 0.;
           fb_props->tables.SN2E[SN2E_idx(k, l, i)] =
@@ -1336,12 +1344,14 @@ void feedback_prepare_interpolation_tables(
         for (k = 3; k < chem5_NXSN; k++) {
           snii2_hi =
               LINEAR_INTERPOLATION(sniilm[j1], snii[k][l][j1], sniilm[j2],
-                                   snii[k][l][j2], fb_props->tables.SNLM[i]);
+                                   snii[k][l][j2], lm_hi);
           snii2_lo = LINEAR_INTERPOLATION(sniilm[j1], snii[k][l][j1],
                                           sniilm[j2], snii[k][l][j2],
-                                          fb_props->tables.SNLM[i - 1]);
-          if (snii2_hi < 0.) snii2_hi = 0.;
-          if (snii2_lo < 0.) snii2_lo = 0.;
+                                          lm_lo);
+          /* No clipping here: the AGB yields (<= 9 Msun) are net yields,
+           * negative for species that are destroyed (e.g. H, and C and O
+           * by hot-bottom burning). They are added to the unprocessed
+           * ejecta, which carry the star's own composition. */
           fb_props->tables.SN2E[SN2E_idx(k, l, i)] =
               fb_props->tables.SN2E[SN2E_idx(k, l, (i - 1))] +
               (snii2_hi + snii2_lo) / 2. *
@@ -1365,10 +1375,10 @@ void feedback_prepare_interpolation_tables(
       if (m[i] > m_l && m[i] < fb_props->M_u2) {
         snii2_hi =
             LINEAR_INTERPOLATION(sniilm[j1], snii[0][l][j1], sniilm[j2],
-                                 snii[0][l][j2], fb_props->tables.SNLM[i]);
+                                 snii[0][l][j2], lm_hi);
         snii2_lo =
             LINEAR_INTERPOLATION(sniilm[j1], snii[0][l][j1], sniilm[j2],
-                                 snii[0][l][j2], fb_props->tables.SNLM[i - 1]);
+                                 snii[0][l][j2], lm_lo);
         if (snii2_hi < 0.) snii2_hi = 0.;
         if (snii2_lo < 0.) snii2_lo = 0.;
         fb_props->tables.SN2R[SN2R_idx(l, i)] =
@@ -1548,6 +1558,9 @@ void feedback_props_init(struct feedback_props *fp,
   const double m_p = phys_const->const_proton_mass;
   const double mu = hydro_props->mu_ionised;
   fp->temp_to_u_factor = k_B / (mu * hydro_gamma_minus_one * m_p);
+  fp->temp_to_u_factor_mu1 =
+      k_B / (hydro_gamma_minus_one * m_p *
+             units_cgs_conversion_factor(us, UNIT_CONV_TEMPERATURE));
 
   /* Calculate conversion factor from rho to n_H
    * Note this assumes primoridal abundance */
@@ -1759,12 +1772,6 @@ void feedback_props_init(struct feedback_props *fp,
       params, "KIARAFeedback:minimum_galaxy_stellar_mass_Msun");
   fp->minimum_galaxy_stellar_mass *= fp->solar_mass_to_mass;
 
-  fp->galaxy_particle_resolution_count = parser_get_opt_param_int(
-      params, "KIARAFeedback:galaxy_particle_resolution_count", 0);
-
-  fp->eta_suppression_factor_floor = parser_get_opt_param_float(
-      params, "KIARAFeedback:eta_suppression_factor_floor", 0.2f);
-
   fp->kick_direction_flag = parser_get_opt_param_double(
       params, "KIARAFeedback:kick_direction_flag", 1);
 
@@ -1839,15 +1846,13 @@ void feedback_props_init(struct feedback_props *fp,
                                       (double)(KIARA_DUST_N_BINS - 1);
     }
   }
-  fp->SNe_smoothing_time_in_Myr = parser_get_opt_param_double(
-      params, "KIARAFeedback:SNe_smoothing_time_in_Myr", 0.);
 #endif
 
   /* Convert Kelvin to internal energy and internal units */
   fp->cold_wind_internal_energy *=
       fp->temp_to_u_factor /
       units_cgs_conversion_factor(us, UNIT_CONV_TEMPERATURE);
-  fp->hot_wind_internal_energy =
+  fp->hot_wind_internal_energy *=
       fp->temp_to_u_factor /
       units_cgs_conversion_factor(us, UNIT_CONV_TEMPERATURE);
 
@@ -1878,6 +1883,13 @@ void feedback_props_init(struct feedback_props *fp,
           "Feedback wind speed early suppression enabled "
           "above redshift: %g",
           fp->wind_velocity_suppression_redshift);
+    }
+
+    if (fabs(fp->wind_eta_suppression_redshift) != 0.f) {
+      message(
+          "Feedback mass loading early suppression enabled "
+          "above redshift: %g",
+          fp->wind_eta_suppression_redshift);
     }
 
     message("Feedback use Chem5 SNII energy: %d",
