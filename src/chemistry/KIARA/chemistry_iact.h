@@ -882,6 +882,15 @@ __attribute__((always_inline)) INLINE static void runner_iact_diffusion(
         chi->dZ_dust_dt[elem] += coef_i * dZd_ij;
         chj->dZ_dust_dt[elem] -= coef_j * dZd_ij;
       }
+      for (int material = 0; material < KIARA_DUST_N_MATERIALS; ++material) {
+        for (int bin = 0; bin < KIARA_DUST_N_BINS; ++bin) {
+          const float dZd_ij =
+              Di * pi->cooling_data.dust_size_distribution[material][bin] -
+              Dj * pj->cooling_data.dust_size_distribution[material][bin];
+          chi->dZ_dust_size_dt[material][bin] += coef_i * dZd_ij;
+          chj->dZ_dust_size_dt[material][bin] -= coef_j * dZd_ij;
+        }
+      }
     }
 #endif
   }
@@ -948,6 +957,14 @@ __attribute__((always_inline)) INLINE static void runner_iact_nonsym_diffusion(
         const float dZd_ij = Di * pi->cooling_data.dust_mass_fraction[elem] -
                              Dj * pj->cooling_data.dust_mass_fraction[elem];
         chi->dZ_dust_dt[elem] += coef_i * dZd_ij;
+      }
+      for (int material = 0; material < KIARA_DUST_N_MATERIALS; ++material) {
+        for (int bin = 0; bin < KIARA_DUST_N_BINS; ++bin) {
+          const float dZd_ij =
+              Di * pi->cooling_data.dust_size_distribution[material][bin] -
+              Dj * pj->cooling_data.dust_size_distribution[material][bin];
+          chi->dZ_dust_size_dt[material][bin] += coef_i * dZd_ij;
+        }
       }
     }
 #endif

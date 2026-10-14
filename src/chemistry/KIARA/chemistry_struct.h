@@ -183,6 +183,9 @@ struct chemistry_part_data {
 #if COOLING_GRACKLE_MODE >= 2
   /*! Variation of the dust mass (per unit gas mass) by element */
   float dZ_dust_dt[chemistry_element_count];
+
+  /*! Variation of the dust mass per unit gas mass in each material/size bin */
+  float dZ_dust_size_dt[KIARA_DUST_N_MATERIALS][KIARA_DUST_N_BINS];
 #endif
 
   /*! Velocity shear tensor in internal and physical units. */

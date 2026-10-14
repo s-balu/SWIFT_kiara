@@ -235,6 +235,7 @@ __attribute__((always_inline)) INLINE static void chemistry_init_part(
   }
 
 #if COOLING_GRACKLE_MODE >= 2
+  kiara_dust_distribution_zero(cpd->dZ_dust_size_dt);
   cpd->local_sfr_density = 0.f;
 #endif
 
@@ -407,6 +408,7 @@ chemistry_part_has_no_neighbours(struct part *restrict p,
   }
 
 #if COOLING_GRACKLE_MODE >= 2
+  kiara_dust_distribution_zero(cpd->dZ_dust_size_dt);
   /* No neighbours, so only the particle's own SFR contributes */
   const float h_inv = 1.0f / p->h;
   cpd->local_sfr_density = kernel_root * max(0.f, p->sf_data.SFR) *
@@ -1076,6 +1078,9 @@ __attribute__((always_inline)) INLINE static void chemistry_end_force(
   /* Found weird dZ_dt values so we should reset everything and exit */
   if (reset_time_derivatives) {
     ch->dZ_dt_total = 0.f;
+#if COOLING_GRACKLE_MODE >= 2
+    kiara_dust_distribution_zero(ch->dZ_dust_size_dt);
+#endif
     for (int elem = 0; elem < chemistry_element_count; elem++) {
       ch->dZ_dt[elem] = 0.f;
 #if COOLING_GRACKLE_MODE >= 2
@@ -1117,12 +1122,24 @@ __attribute__((always_inline)) INLINE static void chemistry_end_force(
          elem++) {
       co->dust_mass_fraction[elem] = dust_mass_elem[elem] * inv;
     }
+    /* Use the same diffusion flux for the material/size bins, including
+     * when total dust mass is unchanged or this particle was dust-free. */
+    for (int material = 0; material < KIARA_DUST_N_MATERIALS; ++material) {
+      for (int bin = 0; bin < KIARA_DUST_N_BINS; ++bin) {
+        const float bin_mass =
+            co->dust_mass * co->dust_size_distribution[material][bin] +
+            ch->dZ_dust_size_dt[material][bin] * dt * factor * m;
+        co->dust_size_distribution[material][bin] = fmaxf(bin_mass, 0.f) * inv;
+      }
+    }
+    kiara_dust_distribution_normalize(co->dust_size_distribution);
     co->dust_mass = new_dust_mass;
   } else {
     for (int elem = 0; elem < chemistry_element_count; elem++) {
       co->dust_mass_fraction[elem] = 0.f;
     }
     co->dust_mass = 0.f;
+    kiara_dust_distribution_zero(co->dust_size_distribution);
   }
 #endif
 
