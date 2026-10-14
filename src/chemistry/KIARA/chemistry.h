@@ -932,16 +932,10 @@ __attribute__((always_inline)) INLINE static void chemistry_end_force(
       ch->du = 0.;
     }
 
-    /* Check dust change (a dust-free particle can still receive dust) */
-    float dust_eps = 0.f;
-    if (co->dust_mass > 0.f) {
-      dust_eps = fabs(ch->dm_dust) / co->dust_mass;
-    } else if (ch->dm_dust > 0.f) {
-      dust_eps = 1.f;
-    }
-
-    float new_dust_mass = co->dust_mass;
-    if (dust_eps >= FIREHOSE_EPSILON_TOLERANCE) new_dust_mass += ch->dm_dust;
+    /* Composition can mix even when the net total dust exchange is zero.
+     * Apply all dust fluxes together to preserve the pairwise exchange. */
+    const float old_dust_mass = co->dust_mass;
+    const float new_dust_mass = fmaxf(old_dust_mass + ch->dm_dust, 0.f);
 
     ch->metal_mass_fraction_total = 0.f;
     for (int elem = 0; elem < chemistry_element_count; ++elem) {
@@ -959,9 +953,9 @@ __attribute__((always_inline)) INLINE static void chemistry_end_force(
         ch->metal_mass_fraction_total += ch->metal_mass_fraction[elem];
       }
 
-      if (dust_eps >= FIREHOSE_EPSILON_TOLERANCE) {
+      if (new_dust_mass > 0.f) {
         const float old_dust_mass_Z =
-            co->dust_mass_fraction[elem] * co->dust_mass;
+            co->dust_mass_fraction[elem] * old_dust_mass;
         co->dust_mass_fraction[elem] =
             (old_dust_mass_Z + ch->dm_dust_Z[elem]) / new_dust_mass;
       }
@@ -976,12 +970,11 @@ __attribute__((always_inline)) INLINE static void chemistry_end_force(
 
       co->dust_mass = 0.f;
       kiara_dust_distribution_zero(co->dust_size_distribution);
-    } else if (dust_eps >= FIREHOSE_EPSILON_TOLERANCE) {
+    } else {
       for (int material = 0; material < KIARA_DUST_N_MATERIALS; ++material) {
         for (int bin = 0; bin < KIARA_DUST_N_BINS; ++bin) {
           const float old_mass =
-              (co->dust_mass - ch->dm_dust) *
-              co->dust_size_distribution[material][bin];
+              old_dust_mass * co->dust_size_distribution[material][bin];
           co->dust_size_distribution[material][bin] =
               fmaxf((old_mass + ch->dm_dust_size[material][bin]) /
                         co->dust_mass,
