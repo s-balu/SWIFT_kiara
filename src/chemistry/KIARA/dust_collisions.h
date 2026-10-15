@@ -10,6 +10,7 @@
 #include "dust.h"
 
 #include <assert.h>
+#include <float.h>
 #include <math.h>
 
 /** Representative radii and single-grain masses, in cgs units.
@@ -21,6 +22,16 @@
 struct kiara_dust_collision_grid {
   double radius[KIARA_DUST_N_BINS];
   double mass[KIARA_DUST_N_BINS];
+};
+
+/** Fixed collision kernels (cm^3/s) and products (grams per collision).
+ * Only i <= j is stored/used. Products must sum to m_i + m_j, including
+ * surviving remnants. Keeping products separate from populations ensures
+ * newly deposited mass is not processed again in the same Euler stage.
+ */
+struct kiara_dust_collision_operator {
+  double kernel[KIARA_DUST_N_BINS][KIARA_DUST_N_BINS];
+  double product[KIARA_DUST_N_BINS][KIARA_DUST_N_BINS][KIARA_DUST_N_BINS];
 };
 
 /**
@@ -136,6 +147,169 @@ static inline double kiara_dust_collision_velocity_dispersion(
 
   return 6.e3 * mach_squared * (radius / 1.e-5) *
          sqrt(hydrogen_mass_cgs / gas_density) * (grain_density / 2.4);
+}
+
+/** Compute one material's derivative and maximum net depletion frequency.
+ * Fractions are relative to TOTAL dust mass, not normalized within a material;
+ * dust_density is the total dust density in g/cm^3. No material conversion or
+ * mass renormalization occurs. The factor 1/2 counts identical pairs once.
+ */
+static inline double kiara_dust_collision_derivative(
+    const struct kiara_dust_collision_grid *grid,
+    const struct kiara_dust_collision_operator *op, const double dust_density,
+    const double fraction[KIARA_DUST_N_BINS],
+    double derivative[KIARA_DUST_N_BINS]) {
+
+  for (int i = 0; i < KIARA_DUST_N_BINS; ++i) derivative[i] = 0.;
+  for (int i = 0; i < KIARA_DUST_N_BINS; ++i) {
+    for (int j = i; j < KIARA_DUST_N_BINS; ++j) {
+      const double rate = dust_density * op->kernel[i][j];
+      if (rate == 0.) continue;
+      const double events = rate * (fraction[i] / grid->mass[i]) *
+                            (fraction[j] / grid->mass[j]) * (i == j ? 0.5 : 1.);
+      for (int k = 0; k < KIARA_DUST_N_BINS; ++k) {
+        /* Subtract parent masses before multiplying by the rate: unresolved
+         * fragments returned to the same bin cause no net depletion. */
+        const double net_mass = op->product[i][j][k] -
+                                (k == i ? grid->mass[i] : 0.) -
+                                (k == j ? grid->mass[j] : 0.);
+        derivative[k] += events * net_mass;
+      }
+    }
+  }
+  double max_loss = 0., material_fraction = 0.;
+  for (int i = 0; i < KIARA_DUST_N_BINS; ++i) material_fraction += fraction[i];
+  for (int i = 0; i < KIARA_DUST_N_BINS; ++i) {
+    if (!isfinite(derivative[i])) return INFINITY;
+    if (derivative[i] < 0. && fraction[i] > 0.)
+      max_loss =
+          fmax(max_loss,
+               -derivative[i] / fmax(fraction[i], 1.e-12 * material_fraction));
+  }
+  return max_loss;
+}
+
+/** Conservative Euler stage with a bounded collision flux.
+ * Limit each pair's WHOLE event count to its available reactants, including
+ * fragments and remnants in that same event count. This allows a trace bin
+ * to be exhausted without clipping a negative population after the update.
+ */
+static inline int kiara_dust_collision_forward(
+    const struct kiara_dust_collision_grid *grid,
+    const struct kiara_dust_collision_operator *op, const double dust_density,
+    const double step, const double fraction[KIARA_DUST_N_BINS],
+    double forward[KIARA_DUST_N_BINS]) {
+
+  double events[KIARA_DUST_N_BINS][KIARA_DUST_N_BINS];
+  double sink[KIARA_DUST_N_BINS] = {0}, limiter[KIARA_DUST_N_BINS];
+  for (int i = 0; i < KIARA_DUST_N_BINS; ++i) {
+    for (int j = i; j < KIARA_DUST_N_BINS; ++j) {
+      const double count =
+          dust_density * op->kernel[i][j] * (fraction[i] / grid->mass[i]) *
+          (fraction[j] / grid->mass[j]) * (i == j ? 0.5 : 1.) * step;
+      if (!isfinite(count)) return 0;
+      events[i][j] = count;
+      for (int k = 0; k < KIARA_DUST_N_BINS; ++k) {
+        const double net = op->product[i][j][k] -
+                           (k == i ? grid->mass[i] : 0.) -
+                           (k == j ? grid->mass[j] : 0.);
+        if (net < 0.) sink[k] -= count * net;
+      }
+    }
+  }
+  for (int k = 0; k < KIARA_DUST_N_BINS; ++k) {
+    if (!isfinite(sink[k])) return 0;
+    limiter[k] = sink[k] > 0. && sink[k] >= fraction[k]
+                     ? (1. - 4. * KIARA_DUST_N_BINS * DBL_EPSILON) *
+                           fraction[k] / sink[k]
+                     : 1.;
+    forward[k] = fraction[k];
+  }
+  for (int i = 0; i < KIARA_DUST_N_BINS; ++i) {
+    for (int j = i; j < KIARA_DUST_N_BINS; ++j) {
+      double scale = 1.;
+      for (int k = 0; k < KIARA_DUST_N_BINS; ++k) {
+        const double net = op->product[i][j][k] -
+                           (k == i ? grid->mass[i] : 0.) -
+                           (k == j ? grid->mass[j] : 0.);
+        if (net < 0.) scale = fmin(scale, limiter[k]);
+      }
+      for (int k = 0; k < KIARA_DUST_N_BINS; ++k) {
+        const double net = op->product[i][j][k] -
+                           (k == i ? grid->mass[i] : 0.) -
+                           (k == j ? grid->mass[j] : 0.);
+        forward[k] += events[i][j] * scale * net;
+      }
+    }
+  }
+  for (int k = 0; k < KIARA_DUST_N_BINS; ++k)
+    if (!isfinite(forward[k]) || forward[k] < 0.) return 0;
+  return 1;
+}
+
+/**
+ * @brief Integrate a fixed collision operator with positive SSP-RK2 substeps.
+ *
+ * @param dust_density Total physical dust density in g/cm^3.
+ * @param dt Duration in seconds. The caller holds velocities fixed over dt.
+ * @param fraction One material's fractions of total dust mass, updated on
+ * success.
+ * @return One if the entire interval was integrated, zero on invalid input,
+ * numerical failure or exceeding the substep budget. On failure the input is
+ * unchanged, so the caller can report the failure or retry with shorter steps.
+ *
+ * Limit initial net depletion to 5% per substep, with an absolute scale of
+ * 10^-12 of this material's mass for trace bins. Bound event counts when trace
+ * reactants would be exhausted. Retry on numerical failure. Do not clip bins
+ * or globally renormalize: both would hide conservation errors. A finite budget
+ * prevents unbounded work on excessively stiff input; no time is skipped.
+ */
+static inline int kiara_dust_collision_evolve(
+    const struct kiara_dust_collision_grid *grid,
+    const struct kiara_dust_collision_operator *op, const double dust_density,
+    const double dt, double fraction[KIARA_DUST_N_BINS]) {
+
+  if (!isfinite(dt) || dt < 0. || !isfinite(dust_density) || dust_density < 0.)
+    return 0;
+  double current[KIARA_DUST_N_BINS];
+  for (int i = 0; i < KIARA_DUST_N_BINS; ++i) {
+    if (!isfinite(fraction[i]) || fraction[i] < 0.) return 0;
+    current[i] = fraction[i];
+  }
+  if (dt == 0. || dust_density == 0.) return 1;
+
+  double remaining = dt;
+  int steps = 0;
+  while (remaining > 0.) {
+    if (++steps > 8192) return 0;
+    double slope[KIARA_DUST_N_BINS];
+    const double loss =
+        kiara_dust_collision_derivative(grid, op, dust_density, current, slope);
+    if (!isfinite(loss)) return 0;
+    if (loss == 0.) break;
+    double step = fmin(remaining, 0.05 / loss);
+    double next[KIARA_DUST_N_BINS];
+    int accepted = 0;
+    for (int attempt = 0; attempt < 32 && !accepted; ++attempt) {
+      if (!(step > 0.) || remaining - step == remaining) return 0;
+      double stage[KIARA_DUST_N_BINS], forward[KIARA_DUST_N_BINS];
+      if (kiara_dust_collision_forward(grid, op, dust_density, step, current,
+                                       stage) &&
+          kiara_dust_collision_forward(grid, op, dust_density, step, stage,
+                                       forward)) {
+        for (int i = 0; i < KIARA_DUST_N_BINS; ++i) {
+          next[i] = 0.5 * current[i] + 0.5 * forward[i];
+        }
+        accepted = 1;
+      }
+      if (!accepted) step *= 0.5;
+    }
+    if (!accepted) return 0;
+    for (int i = 0; i < KIARA_DUST_N_BINS; ++i) current[i] = next[i];
+    remaining -= step;
+  }
+  for (int i = 0; i < KIARA_DUST_N_BINS; ++i) fraction[i] = current[i];
+  return 1;
 }
 
 #endif /* SWIFT_KIARA_DUST_COLLISIONS_H */

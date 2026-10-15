@@ -87,6 +87,7 @@ include_HEADERS += swift_lustre_api.h
 include_HEADERS += part_init.h
 include_HEADERS += chemistry/KIARA/dust.h
 include_HEADERS += chemistry/KIARA/dust_collisions.h
+include_HEADERS += chemistry/KIARA/dust_coagulation.h
 
 # source files for EAGLE extra I/O
 EAGLE_EXTRA_IO_SOURCES=
