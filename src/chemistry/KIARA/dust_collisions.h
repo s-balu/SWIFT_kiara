@@ -1,7 +1,4 @@
 /*******************************************************************************
- * This file is part of SWIFT.
- * Copyright (c) 2026 Balu Sreedhar
- *
  * Shared numerical helpers for KIARA grain collisions.
  ******************************************************************************/
 #ifndef SWIFT_KIARA_DUST_COLLISIONS_H

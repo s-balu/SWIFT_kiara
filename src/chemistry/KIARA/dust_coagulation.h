@@ -1,7 +1,4 @@
 /*******************************************************************************
- * This file is part of SWIFT.
- * Copyright (c) 2026 Balu Sreedhar
- *
  * Li et al. (2021) grain coagulation on KIARA's existing size grid.
  ******************************************************************************/
 #ifndef SWIFT_KIARA_DUST_COAGULATION_H

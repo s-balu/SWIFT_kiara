@@ -1,7 +1,4 @@
 /*******************************************************************************
- * This file is part of SWIFT.
- * Copyright (c) 2026 Balu Sreedhar
- *
  * Compile-time layout and small helpers for the KIARA binned dust model.
  ******************************************************************************/
 #ifndef SWIFT_KIARA_DUST_H
