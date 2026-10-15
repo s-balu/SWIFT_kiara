@@ -1676,8 +1676,6 @@ void cooling_init_chemistry(
        assuming solar abundance ratios*/
     p->chemistry_data.metal_mass_fraction_total = 0.f;
     p->cooling_data.dust_mass = 0.f;
-    kiara_dust_distribution_powerlaw(
-        p->cooling_data.dust_size_distribution);
     /* Offset index for the SolarAbundaces array (starts at He -> Fe) */
     int j = 1;
     for (int i = chemistry_element_C; i < chemistry_element_count; i++) {
@@ -1704,6 +1702,9 @@ void cooling_init_chemistry(
     /* Dust holds the remaining init_dust_to_gas of the self-enriched metals */
     p->cooling_data.dust_mass =
         init_dust_to_gas * cooling->self_enrichment_metallicity * p->mass;
+    kiara_dust_distribution_powerlaw(
+        p->cooling_data.dust_size_distribution,
+        p->cooling_data.dust_mass_fraction[chemistry_element_C]);
 
     p->chemistry_data.metal_mass_fraction[chemistry_element_He] =
         cooling->chemistry.SolarAbundances[0];

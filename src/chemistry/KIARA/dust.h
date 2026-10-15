@@ -59,14 +59,17 @@ kiara_dust_distribution_normalize(
   }
 }
 
-/* Assign a smooth default mass distribution over logarithmically spaced bins.
- * The caller may overwrite this with a model-specific source distribution. */
+/* Assign flat mass per logarithmic bin, weighted by the carbonaceous fraction. */
 static inline void kiara_dust_distribution_powerlaw(
-    float distribution[KIARA_DUST_N_MATERIALS][KIARA_DUST_N_BINS]) {
+    float distribution[KIARA_DUST_N_MATERIALS][KIARA_DUST_N_BINS],
+    const float carbon_fraction) {
   kiara_dust_distribution_zero(distribution);
   for (int material = 0; material < KIARA_DUST_N_MATERIALS; ++material) {
+    const float material_fraction =
+        material == kiara_dust_carbonaceous ? carbon_fraction
+                                           : 1.f - carbon_fraction;
     for (int bin = 0; bin < KIARA_DUST_N_BINS; ++bin)
-      distribution[material][bin] = 1.f / (float)KIARA_DUST_N_BINS;
+      distribution[material][bin] = material_fraction / (float)KIARA_DUST_N_BINS;
   }
   kiara_dust_distribution_normalize(distribution);
 }
