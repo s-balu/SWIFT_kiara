@@ -1434,7 +1434,9 @@ static void cooling_evolve_grain_size(
   if (p->feedback_data.SNe_ThisTimeStep > 0.f) {
     const double M_gas = hydro_get_mass(p);
     const double v_s = cooling->dust_sne_shockspeed;
-    const double M_swept_Msun = 6800.0 * 1.0 * pow(v_s / 100.0, -2.0);
+    /* Use the same SN energy coefficient as the Grackle dust model. */
+    const double M_swept_Msun =
+        6800.0 * cooling->dust_sne_coeff * pow(v_s / 100.0, -2.0);
     const double Msun_to_code =
         1.989e33 / units_cgs_conversion_factor(us, UNIT_CONV_MASS);
     const double M_swept = M_swept_Msun * Msun_to_code;
