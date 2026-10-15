@@ -192,6 +192,11 @@ void feedback_dust_production_condensation(
     /* Subtract this from ejecta metals */
     sp->feedback_data.metal_mass[chemistry_element_C] -=
         sp->feedback_data.delta_dust_mass[chemistry_element_C];
+    /* Keep gas-metal and dust totals consistent with the condensed carbon. */
+    sp->feedback_data.total_metal_mass -=
+        sp->feedback_data.delta_dust_mass[chemistry_element_C];
+    sp->feedback_data.delta_dust_mass[0] =
+        sp->feedback_data.delta_dust_mass[chemistry_element_C];
   } else {
     /* Choose dust table: If age > 100 Myr, assume ejecta is from AGB,
      * otherwise SNII
