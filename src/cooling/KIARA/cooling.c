@@ -1661,6 +1661,11 @@ __attribute__((always_inline)) INLINE void firehose_cooling_and_dust(
           p->cooling_data.mixing_layer_cool_time);
 #endif
 
+  /* Normal Grackle cooling evolves coupled particles' dust later in this step. */
+  if (!cooling->do_cooling_in_rt && !p->decoupled &&
+      !(p->feedback_data.cooling_shutoff_delay_time > 0.f))
+    return;
+
   cooling_sputter_dust(us, cosmo, cooling, p, xp, dt);
   cooling_evolve_grain_size(us, cosmo, cooling, p, xp, dt);
 }
