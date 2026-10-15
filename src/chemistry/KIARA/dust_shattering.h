@@ -75,7 +75,7 @@ static inline double kiara_dust_shattering_sigma(const double mach,
  * table 2; the configured grain density replaces that table's densities.
  *
  * Implement their section 2.3, equations 9--19, as prescribed by Li section
- * 2.5.3: disrupt the entire projectile; crater 40% of the shocked target mass,
+ * 2.6: disrupt the entire projectile; crater 40% of the shocked target mass,
  * or disrupt the entire target if more than half its mass is shocked. Deposit
  * the surviving target remnant separately. Vaporization pressure sets fragment
  * sizes; it does not remove mass in this collision model.
@@ -165,6 +165,7 @@ static inline void kiara_dust_shattering_operator_init(
         speed_squared += dv * dv;
       }
       const double speed = sqrt(speed_squared);
+      /* Li section 2.6: common 2 km/s shattering threshold. */
       if (speed <= 2.e5) continue;
       const double radius_sum = grid->radius[i] + grid->radius[j];
       op->kernel[i][j] = pi * radius_sum * radius_sum * speed;

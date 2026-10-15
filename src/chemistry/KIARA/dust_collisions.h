@@ -81,7 +81,7 @@ static inline int kiara_dust_collision_grid_init(
  * conserve grain number outside the grid. It must not be interpreted as
  * vaporization or as resolved growth beyond the largest radius.
  *
- * This is a coarse-grid adaptation of Li et al. (2021), section 2.5.3;
+ * This is a coarse-grid adaptation of Li et al. (2021), section 2.6;
  * their 41-bin, piecewise-constant discretization is not used here.
  */
 static inline void kiara_dust_collision_deposit(
@@ -117,7 +117,7 @@ static inline void kiara_dust_collision_deposit(
 }
 
 /**
- * @brief Li et al. (2021), equation 15, grain velocity dispersion in cm/s.
+ * @brief Li et al. (2021), equation 20, grain velocity dispersion in cm/s.
  *
  * All inputs are cgs: grain radius in cm, gas/grain densities in g/cm^3,
  * sound speed in cm/s. This returns the THREE-dimensional dispersion sigma_gr;
@@ -125,7 +125,7 @@ static inline void kiara_dust_collision_deposit(
  * The caller chooses the physical gas phase and performs code-unit conversion.
  *
  * L_J = sqrt(pi c_g^2 / (G rho_g))/2 and v_J = 0.7 sqrt(L_J/pc) km/s.
- * Reference: https://arxiv.org/abs/2012.03978, section 2.5.3.
+ * Reference: https://doi.org/10.1093/mnras/stab2196, section 2.6.
  */
 static inline double kiara_dust_collision_velocity_dispersion(
     const double radius, const double gas_density, const double sound_speed,

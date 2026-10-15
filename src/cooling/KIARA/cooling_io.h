@@ -59,6 +59,10 @@ __attribute__((always_inline)) INLINE static void cooling_write_flavour(
   io_write_attribute(h_grp, "KIARA dust grain-size bin centres [micron]",
                      DOUBLE, cooling->dust_grain_sizes,
                      KIARA_DUST_N_BINS);
+  io_write_attribute_i(h_grp, "KIARA dust coagulation", cooling->dust_coagulation);
+  io_write_attribute_i(h_grp, "KIARA dust shattering", cooling->dust_shattering);
+  io_write_attribute_d(h_grp, "KIARA dust grain density [g/cm^3]",
+                       cooling->dust_grain_density);
 #endif
 }
 #endif
@@ -401,6 +405,22 @@ __attribute__((always_inline)) INLINE static void cooling_read_parameters(
 
   cooling->dust_grain_density = parser_get_opt_param_double(
       parameter_file, "KIARACooling:dust_grain_density", 2.4);
+  if (!isfinite(cooling->dust_grain_density) || cooling->dust_grain_density <= 0.)
+    error("KIARACooling:dust_grain_density must be finite and positive");
+
+  cooling->dust_coagulation = parser_get_opt_param_int(
+      parameter_file, "KIARACooling:dust_coagulation", 1);
+  cooling->dust_shattering = parser_get_opt_param_int(
+      parameter_file, "KIARACooling:dust_shattering", 1);
+  if ((cooling->dust_coagulation != 0 && cooling->dust_coagulation != 1) ||
+      (cooling->dust_shattering != 0 && cooling->dust_shattering != 1))
+    error("KIARA dust_coagulation and dust_shattering must be 0 or 1");
+#ifndef HAVE_LIBGSL
+  if (cooling->use_grackle_dust_evol &&
+      (cooling->dust_coagulation || cooling->dust_shattering))
+    error("KIARA grain collisions require GSL; configure with --with-gsl "
+          "or disable dust_coagulation and dust_shattering");
+#endif
 
   cooling->dust_growth_Tref = parser_get_opt_param_double(
       parameter_file, "KIARACooling:dust_growth_Tref", 20.0);

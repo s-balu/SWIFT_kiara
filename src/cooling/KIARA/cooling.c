@@ -31,6 +31,11 @@
 #include <string.h>
 #include <time.h>
 
+#ifdef HAVE_LIBGSL
+#include <gsl/gsl_randist.h>
+#include <gsl/gsl_rng.h>
+#endif
+
 /* Include header */
 #include "cooling.h"
 
@@ -46,6 +51,8 @@ extern chemistry_data *grackle_data;
 
 /* Local includes. */
 #include "chemistry.h"
+#include "chemistry/KIARA/dust_coagulation.h"
+#include "chemistry/KIARA/dust_shattering.h"
 #include "cooling_io.h"
 #include "entropy_floor.h"
 #include "error.h"
@@ -1326,6 +1333,148 @@ static void cooling_evolve_grain_size(
   kiara_dust_distribution_normalize(p->cooling_data.dust_size_distribution);
 }
 
+/** Apply Li et al. (2021), Eqs. 16--21, to KIARA's independent six-bin
+ * materials carried by gas particles, using Grackle's selected local phase. */
+static void cooling_evolve_dust_collisions(
+    const struct unit_system *restrict us,
+    const struct cosmology *restrict cosmo,
+    const struct cooling_function_data *restrict cooling,
+    struct part *restrict p, struct xpart *restrict xp, const double dt,
+    const double time) {
+#if COOLING_GRACKLE_MODE >= 2 && defined(HAVE_LIBGSL)
+  if (!cooling->use_grackle_dust_evol ||
+      (!cooling->dust_coagulation && !cooling->dust_shattering) ||
+      p->cooling_data.dust_mass <= 0.f || dt == 0.)
+    return;
+  if (!isfinite(dt) || dt < 0. || !isfinite(time))
+    error("Invalid dust collision time for particle %lld", p->id);
+
+  /* KIARA adaptation of Li Eqs. 9--10: local cold-phase or resolved gas. */
+  const int cold = p->cooling_data.subgrid_temp > 0.f &&
+                   p->cooling_data.subgrid_fcold > 1.e-6f;
+  const double rho = cold ? p->cooling_data.subgrid_dens
+                          : hydro_get_physical_density(p, cosmo);
+  if (rho <= 0.) return; /* No collisions in vacuum. */
+  const double u =
+      cold ? cooling_convert_temp_to_u(p->cooling_data.subgrid_temp,
+                                       xp->cooling_data.e_frac, cooling, p, xp)
+           : hydro_get_physical_internal_energy(p, xp, cosmo);
+  const double rho_cgs =
+      rho * units_cgs_conversion_factor(us, UNIT_CONV_DENSITY);
+  const double sound_speed_squared =
+      hydro_gamma * hydro_gamma_minus_one * u *
+      units_cgs_conversion_factor(us, UNIT_CONV_ENERGY_PER_UNIT_MASS);
+  const double gas_mass = hydro_get_mass(p);
+  if (!isfinite(gas_mass) || gas_mass <= 0.)
+    error("Invalid gas mass for dust collisions, particle %lld", p->id);
+  const double dust_density =
+      ((double)p->cooling_data.dust_mass / gas_mass) * rho_cgs;
+  const double dt_seconds =
+      dt * units_cgs_conversion_factor(us, UNIT_CONV_TIME);
+  if (!isfinite(rho_cgs) || !isfinite(sound_speed_squared) ||
+      sound_speed_squared <= 0. || !isfinite(dust_density) ||
+      dust_density < 0. || !isfinite(dt_seconds) || dt_seconds <= 0.)
+    error("Invalid gas conditions for dust collisions, particle %lld", p->id);
+
+  struct kiara_dust_collision_grid grid;
+  if (!kiara_dust_collision_grid_init(&grid, cooling->dust_grain_sizes,
+                                      cooling->dust_grain_density))
+    error("Invalid KIARA dust collision grid");
+  cooling_init_dust_distribution(p);
+
+  /* Reproducible draws from particle ID and physical simulation time. */
+  uint64_t time_bits;
+  memcpy(&time_bits, &time, sizeof(time_bits));
+  gsl_rng *rng = gsl_rng_alloc(gsl_rng_taus2);
+  if (rng == NULL) error("Failed to allocate the dust collision RNG");
+  double evolved[KIARA_DUST_N_MATERIALS][KIARA_DUST_N_BINS];
+  for (int material = 0; material < KIARA_DUST_N_MATERIALS; ++material) {
+    double material_fraction = 0.;
+    for (int bin = 0; bin < KIARA_DUST_N_BINS; ++bin) {
+      evolved[material][bin] =
+          p->cooling_data.dust_size_distribution[material][bin];
+      if (!isfinite(evolved[material][bin]) || evolved[material][bin] < 0.)
+        error("Invalid dust bin for particle %lld", p->id);
+      material_fraction += evolved[material][bin];
+    }
+    if (material_fraction == 0.) continue;
+
+    uint64_t seed = (uint64_t)p->id ^ time_bits ^
+                    ((uint64_t)(material + 1) * UINT64_C(0x9e3779b97f4a7c15));
+    seed = (seed ^ (seed >> 30)) * UINT64_C(0xbf58476d1ce4e5b9);
+    seed = (seed ^ (seed >> 27)) * UINT64_C(0x94d049bb133111eb);
+    seed ^= seed >> 31;
+    gsl_rng_set(rng, (unsigned long)(seed ^ (seed >> 32)));
+
+    /* Li Eq. 20 and following text: Gaussian components with variance
+     * sigma^2/3. */
+    double velocity[KIARA_DUST_N_BINS][3];
+    for (int bin = 0; bin < KIARA_DUST_N_BINS; ++bin) {
+      const double sigma_component =
+          kiara_dust_collision_velocity_dispersion(
+              grid.radius[bin], rho_cgs, sqrt(sound_speed_squared),
+              cooling->dust_grain_density) /
+          sqrt(3.);
+      if (!isfinite(sigma_component))
+        error("Invalid grain velocity dispersion, particle %lld", p->id);
+      for (int axis = 0; axis < 3; ++axis)
+        velocity[bin][axis] = gsl_ran_gaussian(rng, sigma_component);
+    }
+
+    /* Li Eq. 16: combine the two mass-transfer operators. */
+    struct kiara_dust_collision_operator op = {0};
+    if (cooling->dust_coagulation)
+      kiara_dust_coagulation_operator_init(
+          &op, &grid, cooling->dust_grain_density,
+          (enum kiara_dust_material)material, (const double (*)[3])velocity);
+    if (cooling->dust_shattering) {
+      struct kiara_dust_collision_operator shattering;
+      kiara_dust_shattering_operator_init(
+          &shattering, &grid, cooling->dust_grain_density,
+          (enum kiara_dust_material)material, (const double (*)[3])velocity);
+      for (int i = 0; i < KIARA_DUST_N_BINS; ++i) {
+        for (int j = i; j < KIARA_DUST_N_BINS; ++j) {
+          const double coag_rate = op.kernel[i][j];
+          const double shat_rate = shattering.kernel[i][j];
+          const double rate = coag_rate + shat_rate;
+          if (rate == 0.) continue;
+          for (int k = 0; k < KIARA_DUST_N_BINS; ++k)
+            op.product[i][j][k] =
+                (coag_rate / rate) * op.product[i][j][k] +
+                (shat_rate / rate) * shattering.product[i][j][k];
+          op.kernel[i][j] = rate;
+        }
+      }
+    }
+    if (!kiara_dust_collision_evolve(&grid, &op, dust_density, dt_seconds,
+                                     evolved[material]))
+      error(
+          "Dust collision integration failed for particle %lld; "
+          "reduce the timestep",
+          p->id);
+  }
+  gsl_rng_free(rng);
+  /* Store both materials after success; preserve their separate mass totals. */
+  for (int material = 0; material < KIARA_DUST_N_MATERIALS; ++material)
+    for (int bin = 0; bin < KIARA_DUST_N_BINS; ++bin)
+      p->cooling_data.dust_size_distribution[material][bin] =
+          evolved[material][bin];
+#else
+#if COOLING_GRACKLE_MODE >= 2
+  if (cooling->use_grackle_dust_evol &&
+      (cooling->dust_coagulation || cooling->dust_shattering))
+    error("KIARA grain collisions require GSL; configure with --with-gsl");
+#endif
+  (void)us;
+  (void)cosmo;
+  (void)cooling;
+  (void)p;
+  (void)xp;
+  (void)dt;
+  (void)time;
+#endif
+}
+
 /**
  * @brief Compute particle quantities for the firehose model
  *
@@ -1699,6 +1848,9 @@ void cooling_cool_part(const struct phys_const *restrict phys_const,
     /* Record this cooling event */
     xp->cooling_data.time_last_event = time;
   }
+
+  /* Run once outside the Firehose/Grackle helpers to avoid duplicate processing. */
+  cooling_evolve_dust_collisions(us, cosmo, cooling, p, xp, dt, time);
 
   /* The SN rate deposited by stellar feedback has now been used (for the
    * dust and G0) over this step */

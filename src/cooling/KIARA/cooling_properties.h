@@ -143,6 +143,10 @@ struct cooling_function_data {
   /*! Representative grain radius of every size bin, in micron. */
   double dust_grain_sizes[KIARA_DUST_N_BINS];
 
+  /*! Enable Li-based grain collisions on the existing material/size grid. */
+  int dust_coagulation;
+  int dust_shattering;
+
   /*! For dust model, need self-enrichment up to a small metallicity to
    * kick-start dust */
   double self_enrichment_metallicity;

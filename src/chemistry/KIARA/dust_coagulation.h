@@ -12,7 +12,7 @@
 /**
  * @brief Sticking threshold in cm/s: Hirashita & Yan (2009), equation 8.
  *
- * Li et al. (2021), section 2.5.3, adopts this threshold, including F_stick=10.
+ * Li et al. (2021), section 2.6, adopts this threshold, including F_stick=10.
  * Use graphite/quartz surface energy, Young's modulus and Poisson ratio from
  * Hirashita & Yan table 2 for carbonaceous/silicate material. Their equation
  * for the reduced elastic modulus is 1/E = 2(1-nu)^2/E_material for identical
@@ -49,7 +49,8 @@ static inline double kiara_dust_coagulation_threshold(
  * rate. No RMS-speed substitution or density/temperature switch overrides the
  * sticking threshold. Below threshold, the sticking probability is unity.
  * Representative-radius cross-sections and conservative interpolation of the
- * product mass adapt Li's equations 13--16 to the existing six mass pivots.
+ * product mass adapt Li's equations 16, 18 and 21 to the existing six mass
+ * pivots.
  */
 static inline void kiara_dust_coagulation_operator_init(
     struct kiara_dust_collision_operator *op,
@@ -75,6 +76,7 @@ static inline void kiara_dust_coagulation_operator_init(
       const double radius_sum = grid->radius[i] + grid->radius[j];
       op->kernel[i][j] = pi * radius_sum * radius_sum * speed;
       const double product_mass = grid->mass[i] + grid->mass[j];
+      /* Li Eq. 21: merge masses, interpolating onto KIARA's six pivots. */
       kiara_dust_collision_deposit(grid, product_mass, product_mass,
                                    op->product[i][j]);
     }
