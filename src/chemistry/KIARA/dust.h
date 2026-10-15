@@ -39,6 +39,17 @@ kiara_dust_distribution_sum(
   return sum;
 }
 
+/** Rescale a material's size shape, seeding an empty row in the largest bin. */
+static inline void kiara_dust_distribution_rescale_material(
+    float distribution[KIARA_DUST_N_BINS], const float material_fraction) {
+  double sum = 0.;
+  for (int bin = 0; bin < KIARA_DUST_N_BINS; ++bin) sum += distribution[bin];
+  const double scale = sum > 0. ? material_fraction / sum : 0.;
+  for (int bin = 0; bin < KIARA_DUST_N_BINS; ++bin)
+    distribution[bin] *= scale;
+  if (sum == 0.) distribution[KIARA_DUST_N_BINS - 1] = material_fraction;
+}
+
 /** Clamp negative entries and normalize a non-empty distribution to unity. */
 static inline void
 kiara_dust_distribution_normalize(

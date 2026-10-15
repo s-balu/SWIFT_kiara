@@ -705,6 +705,22 @@ void cooling_copy_from_grackle2(
       }
     }
     cooling_init_dust_distribution(p);
+    /* Match Grackle's elemental dust inventory while preserving each material's
+     * existing size shape. */
+    const float dust_total = p->cooling_data.dust_mass_fraction[0];
+    if (p->cooling_data.dust_mass > 0.f && dust_total > 0.f) {
+      const float carbon_fraction = fminf(
+          fmaxf(p->cooling_data.dust_mass_fraction[chemistry_element_C] /
+                    dust_total,
+                0.f),
+          1.f);
+      const float material_fraction[KIARA_DUST_N_MATERIALS] = {
+          carbon_fraction, 1.f - carbon_fraction};
+      for (int material = 0; material < KIARA_DUST_N_MATERIALS; ++material)
+        kiara_dust_distribution_rescale_material(
+            p->cooling_data.dust_size_distribution[material],
+            material_fraction[material]);
+    }
   }
 }
 #else
