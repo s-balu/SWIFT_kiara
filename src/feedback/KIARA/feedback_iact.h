@@ -787,6 +787,9 @@ feedback_do_chemical_enrichment_of_gas_around_star(
   if (pj->cooling_data.dust_mass > 0.) {
     const double dust_mass_inv = 1. / pj->cooling_data.dust_mass;
 
+    /* Index 0 stores the normalized composition sum, not hydrogen in dust. */
+    pj->cooling_data.dust_mass_fraction[chemistry_element_H] = 1.f;
+
     /* Divide by new dust mass to get the fractions */
     for (int elem = chemistry_element_He; elem < chemistry_element_count;
          elem++) {
