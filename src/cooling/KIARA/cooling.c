@@ -1254,7 +1254,7 @@ __attribute__((always_inline)) INLINE void cooling_sputter_dust(
       const double tsp = 1.7e8 * 3.15569251e7 /
                          units_cgs_conversion_factor(us, UNIT_CONV_TIME) *
                          (a_eff / 0.1) * (1.e-27 / rho_cgs) *
-                         (pow(2.e6 / Tstream, 2.5) + 1.0);
+                         (pow(2.e6 / Tstream_K, 2.5) + 1.0);
 
       const float dust_mass_old = p->cooling_data.dust_mass;
 
@@ -1329,7 +1329,7 @@ __attribute__((always_inline)) INLINE void cooling_sputter_dust(
                                  units_cgs_conversion_factor(us, UNIT_CONV_TIME) *
                                  (cooling->dust_grain_sizes[bin] / 0.1) *
                                  (1.e-27 / rho_cgs) *
-                                 (pow(2.e6 / Tstream, 2.5) + 1.0);
+                                 (pow(2.e6 / Tstream_K, 2.5) + 1.0);
           const float old_bin =
               p->cooling_data.dust_size_distribution[material][bin];
           const float moved = old_bin * (1.f - expf(-dt / tsp_bin));
