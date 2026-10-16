@@ -760,6 +760,9 @@ feedback_do_chemical_enrichment_of_gas_around_star(
   pj->feedback_data.SNe_ThisTimeStep =
       fmax(pj->feedback_data.SNe_ThisTimeStep, 0.);
 
+  /* Save old dust mass for grain size fraction update */
+  const double old_dust_mass = pj->cooling_data.dust_mass;
+
   /* Spread dust ejecta to gas */
   for (int elem = chemistry_element_He; elem < chemistry_element_count;
        elem++) {
@@ -784,11 +787,30 @@ feedback_do_chemical_enrichment_of_gas_around_star(
   if (pj->cooling_data.dust_mass > 0.) {
     const double dust_mass_inv = 1. / pj->cooling_data.dust_mass;
 
+    /* Index 0 stores the normalized composition sum, not hydrogen in dust. */
+    pj->cooling_data.dust_mass_fraction[chemistry_element_H] = 1.f;
+
     /* Divide by new dust mass to get the fractions */
     for (int elem = chemistry_element_He; elem < chemistry_element_count;
          elem++) {
       pj->cooling_data.dust_mass_fraction[elem] *= dust_mass_inv;
     }
+
+    /* Update the material/size distribution by mass-weighting existing dust
+     * with the newly deposited ejecta. */
+    for (int material = 0; material < KIARA_DUST_N_MATERIALS; ++material) {
+      for (int bin = 0; bin < KIARA_DUST_N_BINS; ++bin) {
+        const double old_bin_mass =
+            old_dust_mass *
+            pj->cooling_data.dust_size_distribution[material][bin];
+        const double new_bin_mass =
+            si->feedback_data.delta_dust_size_mass[material][bin] *
+            Omega_frac;
+        pj->cooling_data.dust_size_distribution[material][bin] =
+            (old_bin_mass + new_bin_mass) * dust_mass_inv;
+      }
+    }
+    kiara_dust_distribution_normalize(pj->cooling_data.dust_size_distribution);
 
     /* Check for inconsistency */
     if (pj->cooling_data.dust_mass > 0.2f * pj->mass) {
@@ -809,6 +831,7 @@ feedback_do_chemical_enrichment_of_gas_around_star(
     for (int elem = 0; elem < chemistry_element_count; elem++) {
       pj->cooling_data.dust_mass_fraction[elem] = 0.f;
     }
+    kiara_dust_distribution_zero(pj->cooling_data.dust_size_distribution);
   }
 
 #endif
