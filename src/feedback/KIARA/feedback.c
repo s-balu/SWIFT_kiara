@@ -1971,6 +1971,19 @@ void feedback_props_init(struct feedback_props *fp,
             fp->with_SNII_energy_from_chem5);
     message("Feedback use Chem5 SNIa energy: %d",
             fp->with_SNIa_energy_from_chem5);
+#if COOLING_GRACKLE_MODE >= 2
+    message("Feedback dust maximum condensation fraction: %g",
+            fp->max_dust_fraction);
+    message("Feedback dust SNII condensation boost: %g", dust_boost_factor);
+    message("Feedback dust SNII carbon condensation efficiency: %g",
+            fp->delta_SNII[chemistry_element_C]);
+    message("Feedback dust AGB C-rich carbon condensation efficiency: %g",
+            fp->delta_AGBCOG1[chemistry_element_C]);
+    message("Feedback dust SNII smallest-bin mass fraction: %g",
+            fp->dust_size_distribution_SNII[kiara_dust_carbonaceous][0]);
+    message("Feedback dust AGB smallest-bin mass fraction: %g",
+            fp->dust_size_distribution_AGB[kiara_dust_carbonaceous][0]);
+#endif
   }
 }
 

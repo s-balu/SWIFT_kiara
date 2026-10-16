@@ -303,6 +303,35 @@ void cooling_print_backend(const struct cooling_function_data *cooling) {
   message("\tTime = %g", cooling->units.time_units);
   message("\tScale Factor = %g (units: %g)", cooling->units.a_value,
           cooling->units.a_units);
+
+#if COOLING_GRACKLE_MODE >= 2
+  message("Dust evolution enabled: %d", cooling->use_grackle_dust_evol);
+  if (cooling->use_grackle_dust_evol) {
+    message(
+        "Dust materials: %d (carbonaceous, silicate), carried by gas particles",
+        KIARA_DUST_N_MATERIALS);
+    message("Dust grain-size bins per material: %d", KIARA_DUST_N_BINS);
+    for (int bin = 0; bin < KIARA_DUST_N_BINS; ++bin)
+      message("Dust grain-size bin %d radius [micron]: %g", bin,
+              cooling->dust_grain_sizes[bin]);
+    message("Dust coagulation enabled: %d", cooling->dust_coagulation);
+    message("Dust shattering enabled: %d", cooling->dust_shattering);
+    message("Dust grain density [g/cm^3]: %g", cooling->dust_grain_density);
+    message("Dust Grackle grain radius [micron]: %g", cooling->dust_grainsize);
+    message("Dust growth reference timescale [Gyr]: %g",
+            cooling->dust_growth_tauref);
+    message("Dust growth reference density [g/cm^3]: %g",
+            cooling->dust_growth_densref);
+    message("Dust growth reference temperature [K]: %g",
+            cooling->dust_growth_Tref);
+    message("Dust SN destruction efficiency: %g",
+            cooling->dust_destruction_eff);
+    message("Dust SN energy [1e51 erg]: %g", cooling->dust_sne_coeff);
+    message("Dust SN shock speed [km/s]: %g", cooling->dust_sne_shockspeed);
+    message("Dust self-enrichment metallicity: %g",
+            cooling->self_enrichment_metallicity);
+  }
+#endif
 }
 
 #if COOLING_GRACKLE_MODE >= 1
