@@ -353,14 +353,14 @@ __attribute__((always_inline)) INLINE static int cooling_write_particles(
   num++;
 
   list[num] = io_make_output_field_convert_part(
-      "CarbonaceousDustBinMasses", FLOAT, KIARA_DUST_N_BINS, UNIT_CONV_MASS,
+      "DustCarbonaceousBinMasses", FLOAT, KIARA_DUST_N_BINS, UNIT_CONV_MASS,
       0.f, parts, xparts, convert_part_carbonaceous_dust_bin_masses,
       "Carbonaceous dust mass in each grain-size bin; bin centres are stored "
       "in the CoolingScheme metadata.");
   num++;
 
   list[num] = io_make_output_field_convert_part(
-      "SilicateDustBinMasses", FLOAT, KIARA_DUST_N_BINS, UNIT_CONV_MASS, 0.f,
+      "DustSilicateBinMasses", FLOAT, KIARA_DUST_N_BINS, UNIT_CONV_MASS, 0.f,
       parts, xparts, convert_part_silicate_dust_bin_masses,
       "Silicate dust mass in each grain-size bin; bin centres are stored in "
       "the CoolingScheme metadata.");
