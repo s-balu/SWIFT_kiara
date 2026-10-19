@@ -55,6 +55,14 @@ runner_iact_nonsym_rt_injection_prep(const float r2, const float dx[3],
    * have nothing to do here. */
   if (si->density.wcount == 0.f) return;
 
+  /* Gas particle must be within stars' smoothing length to receive energy */
+  if (hi * hi < r2) return;
+
+  /* Don't give photon energy to wind/non-cooling particles */
+  if (pj->decoupled || pj->feedback_data.decoupling_delay_time > 0.f ||
+      pj->feedback_data.cooling_shutoff_delay_time)
+    return;
+
 #ifdef SWIFT_RT_DEBUG_CHECKS
   si->rt_data.debug_iact_hydro_inject_prep += 1;
 #endif
@@ -124,6 +132,14 @@ __attribute__((always_inline)) INLINE static void runner_iact_rt_inject(
 
 #endif
 
+  /* Gas particle must be within stars' smoothing length to receive energy */
+  if (hi * hi < r2) return;
+
+  /* Don't give photon energy to wind/non-cooling particles */
+  if (pj->decoupled || pj->feedback_data.decoupling_delay_time > 0.f ||
+      pj->feedback_data.cooling_shutoff_delay_time)
+    return;
+
   /* Compute the weight of the neighbouring particle */
   const float hi_inv = 1.f / hi;
   const float r = sqrtf(r2);
@@ -168,14 +184,21 @@ __attribute__((always_inline)) INLINE static void runner_iact_rt_inject(
     const float injected_energy_density =
         si->rt_data.emission_this_step[g] * weight * Vinv;
     pj->rt_data.radiation[g].energy_density += injected_energy_density;
-    if (pj->rt_data.radiation[g].energy_density > 0.f && g == 0) {
-      // message("RT_energy_inj: z=%g sid=%lld pid=%lld RTgrp=%d w=%g Vinv=%g
-      // Reff=%g h=%g Enew=%g Eold=%g frac=%g\n", 1./a-1., si->id, pj->id, g,
-      // weight, Vinv, pow(3./(4.*M_PI*Vinv), 1./3), pj->h,
-      // injected_energy_density,
-      // pj->rt_data.radiation[g].energy_density-injected_energy_density,
-      // injected_energy_density/pj->rt_data.radiation[g].energy_density);
-    }
+#ifdef SWIFT_KIARA_RT_DEBUG
+    pj->rt_data.debug_dE[0] += injected_energy_density * pj->geometry.volume;
+#endif
+    if (g == 0 &&
+        injected_energy_density * pj->geometry.volume * 1.98841e+53 > 1.e57)
+      message(
+          "RT_energy_inj: z=%g sid=%lld pid=%lld RTgrp=%d w=%g V=%g Reff=%g "
+          "h=%g tdec=%g Estar=%g Einj=%g Eph=%g",
+          1. / a - 1., si->id, pj->id, g, weight, 1. / Vinv,
+          pow(3. / (4. * M_PI * Vinv), 1. / 3), pj->h,
+          pj->feedback_data.decoupling_delay_time,
+          si->rt_data.emission_this_step[g] * 1.98841e+53,
+          injected_energy_density * pj->geometry.volume * 1.98841e+53,
+          pj->rt_data.radiation[g].energy_density * pj->geometry.volume *
+              1.98841e+53);
     /* Don't inject flux. */
   }
 
@@ -229,74 +252,16 @@ __attribute__((always_inline)) INLINE static void runner_iact_rt_flux_common(
   }
 #endif
 
-  /* Get r and 1/r. */
+  /* Check if particles are eligible for this interaction */
+  if (rt_check_ineligible(pi, pj, r2)) return;
+
+  /* Get r. */
   const float r = sqrtf(r2);
-  const float r_inv = 1.0f / r;
-
-  /* Initialize local variables */
-  float Bi[3][3];
-  float Bj[3][3];
-  for (int k = 0; k < 3; k++) {
-    for (int l = 0; l < 3; l++) {
-      Bi[k][l] = pi->geometry.matrix_E[k][l];
-      Bj[k][l] = pj->geometry.matrix_E[k][l];
-    }
-  }
-  const float Vi = pi->geometry.volume;
-  const float Vj = pj->geometry.volume;
-
-  /* Compute kernel of pi. */
-  float wi, wi_dx;
-  const float hi_inv = 1.0f / hi;
-  const float hi_inv_dim = pow_dimension(hi_inv);
-  const float xi = r * hi_inv;
-  kernel_deval(xi, &wi, &wi_dx);
-
-  /* Compute kernel of pj. */
-  float wj, wj_dx;
-  const float hj_inv = 1.0f / hj;
-  const float hj_inv_dim = pow_dimension(hj_inv);
-  const float xj = r * hj_inv;
-  kernel_deval(xj, &wj, &wj_dx);
 
   /* Compute (square of) area */
   /* eqn. (7) */
-  float Anorm2 = 0.0f;
   float A[3];
-  if (fvpm_part_geometry_well_behaved(pi) &&
-      fvpm_part_geometry_well_behaved(pj)) {
-    /* in principle, we use Vi and Vj as weights for the left and right
-     * contributions to the generalized surface vector.
-     * However, if Vi and Vj are very different (because they have very
-     * different smoothing lengths), then the expressions below are more
-     * stable. */
-    float Xi = Vi;
-    float Xj = Vj;
-#ifdef GIZMO_VOLUME_CORRECTION
-    if (fabsf(Vi - Vj) / min(Vi, Vj) > 1.5f * hydro_dimension) {
-      Xi = (Vi * hj + Vj * hi) / (hi + hj);
-      Xj = Xi;
-    }
-#endif
-    for (int k = 0; k < 3; k++) {
-      /* we add a minus sign since dx is pi->x - pj->x */
-      A[k] = -Xi * (Bi[k][0] * dx[0] + Bi[k][1] * dx[1] + Bi[k][2] * dx[2]) *
-                 wi * hi_inv_dim -
-             Xj * (Bj[k][0] * dx[0] + Bj[k][1] * dx[1] + Bj[k][2] * dx[2]) *
-                 wj * hj_inv_dim;
-      Anorm2 += A[k] * A[k];
-    }
-  } else {
-    /* ill condition gradient matrix: revert to SPH face area */
-    const float hidp1 = pow_dimension_plus_one(hi_inv);
-    const float hjdp1 = pow_dimension_plus_one(hj_inv);
-    const float Anorm =
-        -(hidp1 * Vi * Vi * wi_dx + hjdp1 * Vj * Vj * wj_dx) * r_inv;
-    A[0] = -Anorm * dx[0];
-    A[1] = -Anorm * dx[1];
-    A[2] = -Anorm * dx[2];
-    Anorm2 = Anorm * Anorm * r2;
-  }
+  const float Anorm2 = rt_interface_area(r2, dx, hi, hj, pi, pj, A);
 
   /* if the interface has no area, nothing happens and we return */
   /* continuing results in dividing by zero and NaN's... */
@@ -340,9 +305,21 @@ __attribute__((always_inline)) INLINE static void runner_iact_rt_flux_common(
   const float mindt =
       (rtj->flux_dt > 0.f) ? fminf(rti->flux_dt, rtj->flux_dt) : rti->flux_dt;
 
+  /* Accumulate the interface areas for the time-step criterion, for the
+   * particles whose fluxes are updated here */
+  if (mindt > 0.f) {
+    rti->area_sum += Anorm;
+    if (mode == 1 || (rtj->flux_dt < 0.f)) rtj->area_sum += Anorm;
+  }
+
+  /* The Riemann solver returns the F-equation flux divided by c (see
+   * rt_part_get_transport_state_vector): each particle applies its own c. */
+  const float ci = rt_part_get_reduced_speed_of_light(pi);
+  const float cj = rt_part_get_reduced_speed_of_light(pj);
+
   for (int g = 0; g < RT_NGROUPS; g++) {
 
-    /* radiation state to be used to compute the flux */
+    /* transport state W = (c E, F) to be used to compute the flux */
     float Ui[4], Uj[4];
     rt_gradients_predict(pi, pj, Ui, Uj, g, dx, r, xij_i);
 
@@ -368,18 +345,74 @@ __attribute__((always_inline)) INLINE static void runner_iact_rt_flux_common(
      * of flux_dt, we can detect inactive neighbours through their negative time
      * step. */
     /* Make sure mindt larger than 0 to avoid mindt=-1 case. */
-    if (mindt > 0.f) {
-      rti->flux[g].energy -= totflux[0] * mindt;
-      rti->flux[g].flux[0] -= totflux[1] * mindt;
-      rti->flux[g].flux[1] -= totflux[2] * mindt;
-      rti->flux[g].flux[2] -= totflux[3] * mindt;
-      if (mode == 1 || (rtj->flux_dt < 0.f)) {
-        rtj->flux[g].energy += totflux[0] * mindt;
-        rtj->flux[g].flux[0] += totflux[1] * mindt;
-        rtj->flux[g].flux[1] += totflux[2] * mindt;
-        rtj->flux[g].flux[2] += totflux[3] * mindt;
+
+    /* Positivity: a particle may export at most the fraction |A_ij| / sum|A|
+     * (interface areas of its last transport step) of the radiation energy
+     * it holds through this interface, so that over all its interfaces it
+     * never exports more than it has. The exchanged energy is
+     * totflux * mindt / a (see rt_finalise_transport), and the same flux is
+     * applied to both particles, so the exchange stays conservative.
+     * The energy a particle holds is only updated at the end of its own RT
+     * step (rt_finalise_transport), but a neighbour with a smaller step
+     * exchanges with it every one of its own steps in between: limit the
+     * export per exchange to the fraction mindt / dt_exp of the exporter's
+     * step dt_exp, so it never exports more than it holds over its whole
+     * step. mindt is the step of the particle with the smaller time bin.
+     * The interface areas are those of the last transport step or of this
+     * step's gradient loop, whichever sum is larger, so the limits over all
+     * interfaces add up to at most the energy held even if the neighbourhood
+     * changed since the last step.
+     * The gradient loop only sees the neighbours within the particle's own
+     * kernel, while the transport also exchanges with those whose kernel
+     * contains it, so its area alone can be far too small. A particle without
+     * a transport step with any interface yet (e.g. a wind particle that just
+     * recoupled) therefore exports nothing until it has one: its full area
+     * is known after one RT step.
+     * Everything used here is identical on both sides of an MPI boundary. */
+    if (mindt > 0.f && totflux[0] != 0.f) {
+      const struct part *restrict p_exp = (totflux[0] > 0.f) ? pi : pj;
+      const float area_sum = fmaxf(p_exp->rt_data.area_sum_last,
+                                   p_exp->rt_data.area_sum_grad);
+      const int no_area = (p_exp->rt_data.area_sum_last <= 0.f);
+      const int bin_exp = p_exp->rt_time_data.time_bin;
+      const int bin_min =
+          min(pi->rt_time_data.time_bin, pj->rt_time_data.time_bin);
+      const float dt_frac =
+          (bin_min > 0 && bin_exp > bin_min) ? ldexpf(1.f, bin_min - bin_exp)
+                                             : 1.f;
+      const float E_avail = p_exp->rt_data.radiation[g].energy_density *
+                            p_exp->geometry.volume * dt_frac;
+      const float E_max =
+          no_area ? 0.f
+                  : ((area_sum > Anorm) ? E_avail * Anorm / area_sum : E_avail);
+      const float E_exch = fabsf(totflux[0]) * mindt / a;
+      if (E_exch > E_max) {
+        const float ratio = E_max / E_exch;
+        totflux[0] *= ratio;
+        totflux[1] *= ratio;
+        totflux[2] *= ratio;
+        totflux[3] *= ratio;
       }
     }
+
+    if (mindt > 0.f) {
+      rti->flux[g].energy -= totflux[0] * mindt;
+      rti->flux[g].flux[0] -= ci * totflux[1] * mindt;
+      rti->flux[g].flux[1] -= ci * totflux[2] * mindt;
+      rti->flux[g].flux[2] -= ci * totflux[3] * mindt;
+      if (mode == 1 || (rtj->flux_dt < 0.f)) {
+        rtj->flux[g].energy += totflux[0] * mindt;
+        rtj->flux[g].flux[0] += cj * totflux[1] * mindt;
+        rtj->flux[g].flux[1] += cj * totflux[2] * mindt;
+        rtj->flux[g].flux[2] += cj * totflux[3] * mindt;
+      }
+    }
+    // if (g==0 && totflux[0] != 0. && (Ei > 1.e60 || Ej > 1.e60))
+    // message("RT_energy_exch: z=%g pid=%lld pjd=%lld fluxdt=%g mindt=%g
+    // Ftot=%g Ei=%g Eiprev=%g Ej=%g Ejprev=%g hi=%g hj=%g r=%g", 1./a-1.,
+    // pi->id, pj->id, rtj->flux_dt, mindt, totflux[g] * mindt * 1.98841e+53,
+    // rti->flux[g].energy * 1.98841e+53, Ei_prev, rtj->flux[g].energy
+    // * 1.98841e+53, Ej_prev, pi->h, pj->h, sqrtf(r2));
   }
 }
 

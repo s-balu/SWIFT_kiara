@@ -957,6 +957,10 @@ __attribute__((always_inline)) INLINE static void chemistry_end_force(
       ch->du = 0.;
     }
 
+    /* output u chemistry. */
+    p->cooling_data.u_chemistry =
+        hydro_get_physical_internal_energy(p, xp, cosmo);
+
     /* Composition can mix even when the net total dust exchange is zero.
      * Apply all dust fluxes together to preserve the pairwise exchange. */
     const float old_dust_mass = co->dust_mass;
