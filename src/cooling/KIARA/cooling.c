@@ -1677,6 +1677,13 @@ __attribute__((always_inline)) INLINE void firehose_cooling_and_dust(
    * skip the extra grackle call here. */
   if (p->chemistry_data.radius_stream <= 0.f ||
       p->chemistry_data.rho_ambient <= 0.f) {
+    /* Decoupled and cooling-shutoff gas bypasses Grackle, so still sputter it. */
+    if (!cooling->do_cooling_in_rt &&
+        (p->decoupled ||
+         p->feedback_data.cooling_shutoff_delay_time > 0.f)) {
+      cooling_sputter_dust(us, cosmo, cooling, p, xp, dt);
+      cooling_evolve_grain_size(us, cosmo, cooling, p, xp, dt);
+    }
     return;
   }
 
