@@ -63,6 +63,18 @@ static void *engine_do_redistribute(const char *label, int *counts, char *parts,
 
   if (syncredist) {
 
+    /* Our tags are the index of the chunk being sent. We send at most
+     * INT_MAX / sizeofparts particles per chunk and counts are ints, so we
+     * can never need more than sizeofparts + 1 chunks. Note that this is
+     * essentially never going to trigger but its covered by this check anyway.
+     */
+    if ((int)sizeofparts + 1 > cell_max_tag) {
+      error(
+          "Particles are too large (%zu bytes) to tag the synchronous "
+          "redistribute by chunk: the largest usable tag is %d.",
+          sizeofparts, cell_max_tag);
+    }
+
     /* Slow synchronous redistribute,. */
     size_t offset_send = 0, offset_recv = 0;
 
@@ -167,6 +179,14 @@ static void *engine_do_redistribute(const char *label, int *counts, char *parts,
         const int ind_send = nodeID * nr_nodes + k;
         const int ind_recv = k * nr_nodes + nodeID;
 
+        /* Tag each message with the rank of its sender. This is all we need
+         * since there will only ever be a single message in flight between any
+         * two nodes at a time. Furthermore, any other comms that could use tags
+         * in the range 0-nr_nodes will not be in flight concurrent with the
+         * redistribute. */
+        const int send_tag = nodeID;
+        const int recv_tag = k;
+
         /* Are we sending any data this loop? */
         int sending = counts[ind_send] - sent;
         if (sending > 0) {
@@ -183,7 +203,7 @@ static void *engine_do_redistribute(const char *label, int *counts, char *parts,
             /* Otherwise send it. */
             int res =
                 MPI_Isend(&parts[offset_send * sizeofparts], sending, mpi_type,
-                          k, ind_send, MPI_COMM_WORLD, &reqs[2 * k + 0]);
+                          k, send_tag, MPI_COMM_WORLD, &reqs[2 * k + 0]);
             if (res != MPI_SUCCESS)
               mpi_error(res, "Failed to isend parts to node %i.", k);
           }
@@ -200,7 +220,7 @@ static void *engine_do_redistribute(const char *label, int *counts, char *parts,
             activenodes++;
             if (receiving > chunk) receiving = chunk;
             int res = MPI_Irecv(&parts_new[offset_recv * sizeofparts],
-                                receiving, mpi_type, k, ind_recv,
+                                receiving, mpi_type, k, recv_tag,
                                 MPI_COMM_WORLD, &reqs[2 * k + 1]);
             if (res != MPI_SUCCESS)
               mpi_error(res, "Failed to emit irecv of parts from node %i.", k);
@@ -254,37 +274,36 @@ struct redist_mapper_data {
 /* Generic function for accumulating counts for TYPE parts. Note
  * we use a local counts array to avoid the atomic_add in the parts
  * loop. */
-#define ENGINE_REDISTRIBUTE_DEST_MAPPER(TYPE)                              \
-  engine_redistribute_dest_mapper_##TYPE(void *map_data, int num_elements, \
-                                         void *extra_data) {               \
-    struct TYPE *parts = (struct TYPE *)map_data;                          \
-    struct redist_mapper_data *mydata =                                    \
-        (struct redist_mapper_data *)extra_data;                           \
-    struct space *s = mydata->s;                                           \
-    int *dest =                                                            \
-        mydata->dest + (ptrdiff_t)(parts - (struct TYPE *)mydata->base);   \
-    int *lcounts = NULL;                                                   \
-    if ((lcounts = (int *)calloc(mydata->nr_nodes * mydata->nr_nodes,      \
-                                 sizeof(int))) == NULL)                    \
-      error("Failed to allocate counts thread-specific buffer");           \
-    for (int k = 0; k < num_elements; k++) {                               \
-      for (int j = 0; j < 3; j++) {                                        \
-        if (parts[k].x[j] < 0.0)                                           \
-          parts[k].x[j] += s->dim[j];                                      \
-        else if (parts[k].x[j] >= s->dim[j])                               \
-          parts[k].x[j] -= s->dim[j];                                      \
-        if (parts[k].x[j] == s->dim[j]) parts[k].x[j] = 0.0;               \
-      }                                                                    \
-      const int cid = cell_getid(s->cdim, parts[k].x[0] * s->iwidth[0],    \
-                                 parts[k].x[1] * s->iwidth[1],             \
-                                 parts[k].x[2] * s->iwidth[2]);            \
-      dest[k] = s->cells_top[cid].nodeID;                                  \
-      size_t ind = mydata->nodeID * mydata->nr_nodes + dest[k];            \
-      lcounts[ind] += 1;                                                   \
-    }                                                                      \
-    for (int k = 0; k < (mydata->nr_nodes * mydata->nr_nodes); k++)        \
-      atomic_add(&mydata->counts[k], lcounts[k]);                          \
-    free(lcounts);                                                         \
+#define ENGINE_REDISTRIBUTE_DEST_MAPPER(TYPE)                                  \
+  engine_redistribute_dest_mapper_##TYPE(void *map_data, int num_elements,     \
+                                         void *extra_data) {                   \
+    struct TYPE *parts = (struct TYPE *)map_data;                              \
+    struct redist_mapper_data *mydata =                                        \
+        (struct redist_mapper_data *)extra_data;                               \
+    struct space *s = mydata->s;                                               \
+    int *dest =                                                                \
+        mydata->dest + (ptrdiff_t)(parts - (struct TYPE *)mydata->base);       \
+    int *lcounts = NULL;                                                       \
+    if ((lcounts = (int *)calloc(mydata->nr_nodes * mydata->nr_nodes,          \
+                                 sizeof(int))) == NULL)                        \
+      error("Failed to allocate counts thread-specific buffer");               \
+    for (int k = 0; k < num_elements; k++) {                                   \
+      for (int j = 0; j < 3; j++) {                                            \
+        if (parts[k].x[j] < 0.0)                                               \
+          parts[k].x[j] += s->dim[j];                                          \
+        else if (parts[k].x[j] >= s->dim[j])                                   \
+          parts[k].x[j] -= s->dim[j];                                          \
+        if (parts[k].x[j] == s->dim[j]) parts[k].x[j] = 0.0;                   \
+      }                                                                        \
+      const int cid =                                                          \
+          cell_getid_from_pos(s, parts[k].x[0], parts[k].x[1], parts[k].x[2]); \
+      dest[k] = s->cells_top[cid].nodeID;                                      \
+      size_t ind = mydata->nodeID * mydata->nr_nodes + dest[k];                \
+      lcounts[ind] += 1;                                                       \
+    }                                                                          \
+    for (int k = 0; k < (mydata->nr_nodes * mydata->nr_nodes); k++)            \
+      atomic_add(&mydata->counts[k], lcounts[k]);                              \
+    free(lcounts);                                                             \
   }
 
 /**
@@ -552,6 +571,15 @@ void engine_redistribute_relink_mapper(void *map_data, int num_elements,
 void engine_redistribute(struct engine *e) {
 
 #ifdef WITH_MPI
+  /* Our tags are the rank of the sender. Probably always safe but checking
+   * costs us nothing. */
+  if (e->nr_nodes - 1 > cell_max_tag) {
+    error(
+        "Too many ranks (%d) to tag the redistribute by sender: the largest "
+        "usable tag is %d.",
+        e->nr_nodes, cell_max_tag);
+  }
+
   const int nr_nodes = e->nr_nodes;
   const int nodeID = e->nodeID;
   struct space *s = e->s;
@@ -746,9 +774,7 @@ void engine_redistribute(struct engine *e) {
       error("Inhibited particle found after sorting!");
 
     /* New cell index */
-    const int new_cid =
-        cell_getid(s->cdim, p->x[0] * s->iwidth[0], p->x[1] * s->iwidth[1],
-                   p->x[2] * s->iwidth[2]);
+    const int new_cid = cell_getid_from_pos(s, p->x[0], p->x[1], p->x[2]);
 
     /* New cell of this part */
     const struct cell *c = &s->cells_top[new_cid];
@@ -813,9 +839,7 @@ void engine_redistribute(struct engine *e) {
       error("Inhibited particle found after sorting!");
 
     /* New cell index */
-    const int new_cid =
-        cell_getid(s->cdim, sp->x[0] * s->iwidth[0], sp->x[1] * s->iwidth[1],
-                   sp->x[2] * s->iwidth[2]);
+    const int new_cid = cell_getid_from_pos(s, sp->x[0], sp->x[1], sp->x[2]);
 
     /* New cell of this spart */
     const struct cell *c = &s->cells_top[new_cid];
@@ -879,9 +903,7 @@ void engine_redistribute(struct engine *e) {
       error("Inhibited particle found after sorting!");
 
     /* New cell index */
-    const int new_cid =
-        cell_getid(s->cdim, bp->x[0] * s->iwidth[0], bp->x[1] * s->iwidth[1],
-                   bp->x[2] * s->iwidth[2]);
+    const int new_cid = cell_getid_from_pos(s, bp->x[0], bp->x[1], bp->x[2]);
 
     /* New cell of this bpart */
     const struct cell *c = &s->cells_top[new_cid];
@@ -1012,9 +1034,7 @@ void engine_redistribute(struct engine *e) {
       error("Inhibited particle found after sorting!");
 
     /* New cell index */
-    const int new_cid =
-        cell_getid(s->cdim, gp->x[0] * s->iwidth[0], gp->x[1] * s->iwidth[1],
-                   gp->x[2] * s->iwidth[2]);
+    const int new_cid = cell_getid_from_pos(s, gp->x[0], gp->x[1], gp->x[2]);
 
     /* New cell of this gpart */
     const struct cell *c = &s->cells_top[new_cid];
@@ -1318,33 +1338,29 @@ void engine_redistribute(struct engine *e) {
 #ifdef SWIFT_DEBUG_CHECKS
   /* Verify that all parts are in the right place. */
   for (size_t k = 0; k < nr_parts_new; k++) {
-    const int cid = cell_getid(s->cdim, s->parts[k].x[0] * s->iwidth[0],
-                               s->parts[k].x[1] * s->iwidth[1],
-                               s->parts[k].x[2] * s->iwidth[2]);
+    const int cid = cell_getid_from_pos(s, s->parts[k].x[0], s->parts[k].x[1],
+                                        s->parts[k].x[2]);
     if (cells[cid].nodeID != nodeID)
       error("Received particle (%zu) that does not belong here (nodeID=%i).", k,
             cells[cid].nodeID);
   }
   for (size_t k = 0; k < nr_gparts_new; k++) {
-    const int cid = cell_getid(s->cdim, s->gparts[k].x[0] * s->iwidth[0],
-                               s->gparts[k].x[1] * s->iwidth[1],
-                               s->gparts[k].x[2] * s->iwidth[2]);
+    const int cid = cell_getid_from_pos(s, s->gparts[k].x[0], s->gparts[k].x[1],
+                                        s->gparts[k].x[2]);
     if (cells[cid].nodeID != nodeID)
       error("Received g-particle (%zu) that does not belong here (nodeID=%i).",
             k, cells[cid].nodeID);
   }
   for (size_t k = 0; k < nr_sparts_new; k++) {
-    const int cid = cell_getid(s->cdim, s->sparts[k].x[0] * s->iwidth[0],
-                               s->sparts[k].x[1] * s->iwidth[1],
-                               s->sparts[k].x[2] * s->iwidth[2]);
+    const int cid = cell_getid_from_pos(s, s->sparts[k].x[0], s->sparts[k].x[1],
+                                        s->sparts[k].x[2]);
     if (cells[cid].nodeID != nodeID)
       error("Received s-particle (%zu) that does not belong here (nodeID=%i).",
             k, cells[cid].nodeID);
   }
   for (size_t k = 0; k < nr_bparts_new; k++) {
-    const int cid = cell_getid(s->cdim, s->bparts[k].x[0] * s->iwidth[0],
-                               s->bparts[k].x[1] * s->iwidth[1],
-                               s->bparts[k].x[2] * s->iwidth[2]);
+    const int cid = cell_getid_from_pos(s, s->bparts[k].x[0], s->bparts[k].x[1],
+                                        s->bparts[k].x[2]);
     if (cells[cid].nodeID != nodeID)
       error("Received b-particle (%zu) that does not belong here (nodeID=%i).",
             k, cells[cid].nodeID);

@@ -33,6 +33,7 @@
 #endif
 
 /* This object's header. */
+#include "cell.h"
 #include "engine.h"
 
 /* Local headers. */
@@ -418,6 +419,40 @@ void engine_config(int restart, int fof, struct engine *e,
     e->syncredist =
         parser_get_opt_param_int(params, "DomainDecomposition:synchronous", 0);
 
+    /* Cell tags used to send comms between ranks cannot exceed MPI_TAG_UB.
+     * Print this for clarity and set cell_max_tag for later bounding.
+     *
+     * Note the attribute value is itself a pointer to the int, so we pass the
+     * address of our pointer rather than the address of an int. This is the
+     * form the standard uses for this attribute:
+     * MPI_Comm_get_attr(MPI_COMM_WORLD, MPI_TAG_UB, &p, &flag) returns in p a
+     * pointer to an int (see "Attributes" and "Environmental Inquiries" in
+     * the MPI standard, and "NOTES FOR C" in man MPI_Comm_get_attr). */
+    int *tag_ub = NULL;
+    int tag_ub_set = 0;
+    MPI_Comm_get_attr(MPI_COMM_WORLD, MPI_TAG_UB, &tag_ub, &tag_ub_set);
+    if (tag_ub_set) {
+
+      /* We have found MPI_TAG_UB, so we can use it to bound the cell tags. */
+      if (cell_max_tag > *tag_ub) cell_max_tag = *tag_ub;
+
+      /* Report regardless of verbosity setting */
+      if (nodeID == 0) {
+        message("MPI_TAG_UB is %d, cell tags capped at %d", *tag_ub,
+                cell_max_tag);
+      }
+
+    } else if (nodeID == 0) {
+
+      /* Report that MPI_TAG_UB is not available, but don't error out. Note that
+       * the standard requires this exists so its pretty unlikely this will
+       * happen... we will likely never fit this. */
+      message(
+          "MPI_TAG_UB is not available from this MPI implementation, maximum "
+          "possible cell tag is %d",
+          cell_max_tag);
+    }
+
     /* Collect the hostname of each rank into a file */
 
     const int hostname_buffer_length = 256;
@@ -611,6 +646,8 @@ void engine_config(int restart, int fof, struct engine *e,
     /* Print information about the hydro scheme */
     if (e->policy & engine_policy_hydro) {
       if (e->nodeID == 0) hydro_props_print(e->hydro_properties);
+      if (e->nodeID == 0 && verbose)
+        hydro_density_limit_print(e->hydro_properties, e->s->parts);
       if (e->nodeID == 0) pressure_floor_print(e->pressure_floor_props);
       if (e->nodeID == 0) entropy_floor_print(e->entropy_floor);
     }
@@ -962,6 +999,16 @@ void engine_config(int restart, int fof, struct engine *e,
         params, "Scheduler:cell_extra_bparts", space_extra_bparts_default);
     space_extra_sinks = parser_get_opt_param_int(
         params, "Scheduler:cell_extra_sinks", space_extra_sinks_default);
+
+    /* Extract the minimum difference between the task level and the leaves
+     * for background cells. (Only used when running a zoom but not dangerous
+     * to always set.) */
+    zoom_bkg_subdepth_diff_grav =
+        parser_get_opt_param_int(params, "ZoomRegion:bkg_subdepth_diff_grav",
+                                 zoom_bkg_subdepth_diff_grav_default);
+    if (zoom_bkg_subdepth_diff_grav < 0) {
+      error("ZoomRegion:bkg_subdepth_diff_grav must be non-negative.");
+    }
 
     /* Do we want any spare particles for on the fly creation?
        This condition should be the same than in space.c */
