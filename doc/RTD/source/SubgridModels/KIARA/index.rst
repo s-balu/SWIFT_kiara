@@ -81,6 +81,13 @@ zero-radius grains have been physically destroyed. Each transport pass uses
 the old distribution once, so grains cannot be processed repeatedly while
 looping over newly populated bins.
 
+SN shock processing retains the existing scalar destruction in Grackle and
+uses ``a_new/a = exp(-epsilon*N_SN*M_s/(3*M_gas))`` to update the surviving
+size shape, with ``M_s`` from Li equation 14. This uniform fractional-radius
+erosion is an explicit approximation consistent with scalar exponential mass
+loss, not Li equation 13's tabulated Nozawa conversion kernel. No second mass
+loss is applied by the framework's SN size remap.
+
 Validation
 ----------
 

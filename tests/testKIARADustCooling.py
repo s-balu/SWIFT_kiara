@@ -155,6 +155,18 @@ int main(void) {
       assert(fabs(p.cooling_data.dust_size_distribution[1][i]-.7*cooling.dust_initial_distribution[i])<1.e-7);
     }
     check_state(&p);
+    p=particle(&cooling,&us,cosmo.a,20.);
+    p.chemistry_data.metal_mass_fraction_total=0.f;
+    kiara_dust_distribution_zero(p.cooling_data.dust_size_distribution);
+    p.cooling_data.dust_size_distribution[0][KIARA_DUST_N_BINS-1]=.3f;
+    p.cooling_data.dust_size_distribution[1][KIARA_DUST_N_BINS-1]=.7f;
+    p.feedback_data.SNe_ThisTimeStep=(-3.*log(.9))/(.3*6800.);
+    cooling_evolve_grain_size(&us,&cosmo,&cooling,&p,&xp,1.);
+    number=0.;
+    for(int m=0;m<2;++m) for(int i=0;i<KIARA_DUST_N_BINS;++i)
+      number+=p.cooling_data.dust_size_distribution[m][i]/pow(cooling.dust_grain_sizes[i],3.);
+    assert(fabs(number*pow(.9,3.)-1.)<2.e-6);
+    assert(p.cooling_data.dust_mass==.01f);
   }
   cooling.self_enrichment_metallicity=1.e-7;
   cooling.chemistry.SolarAbundances[0]=.24;

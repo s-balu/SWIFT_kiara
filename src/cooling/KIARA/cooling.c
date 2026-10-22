@@ -1461,7 +1461,7 @@ static void cooling_evolve_grain_size(
     }
   }
 
-  /* --- 2. SN shock destruction: large grains shattered -> small bin --- */
+  /* SN shock processing uses the same swept gas mass as scalar destruction. */
   /* Uses SNe_ThisTimeStep already tracked per particle.
    * Swept mass from Sedov-Taylor (Eq. 14, Li+2021):
    * M_s = 6800 * E_SN,51 * (v_s / 100 km/s)^-2  M_sun
@@ -1478,16 +1478,20 @@ static void cooling_evolve_grain_size(
 
     const double N_SNe = p->feedback_data.SNe_ThisTimeStep * dt;
     const double epsilon = cooling->dust_destruction_eff;
-    const float transfer_fraction =
-        fminf(epsilon * N_SNe * M_swept / M_gas, 0.5f);
+    const double optical_depth = epsilon * N_SNe * M_swept / M_gas;
+    const double radius_factor = exp(-optical_depth / 3.);
+    /* Approximate Grackle's scalar shock loss as
+     * a'/a=exp(-epsilon*N_SN*M_s/(3*M_g)); Li Eq. 13's tabulated xi kernel is
+     * unavailable. */
     for (int material = 0; material < KIARA_DUST_N_MATERIALS; ++material) {
-      for (int bin = KIARA_DUST_N_BINS - 1; bin > 0; --bin) {
-        const float moved =
-            p->cooling_data.dust_size_distribution[material][bin] *
-            transfer_fraction;
-        p->cooling_data.dust_size_distribution[material][bin] -= moved;
-        p->cooling_data.dust_size_distribution[material][bin - 1] += moved;
-      }
+      double input[KIARA_DUST_N_BINS], output[KIARA_DUST_N_BINS];
+      for (int i = 0; i < KIARA_DUST_N_BINS; ++i)
+        input[i] = p->cooling_data.dust_size_distribution[material][i];
+      const double sum = kiara_dust_radius_remap(
+          cooling->dust_grain_sizes, input, 0., radius_factor, 0, output);
+      if (!isfinite(sum)) error("Non-finite KIARA dust SN shock update");
+      for (int i = 0; i < KIARA_DUST_N_BINS; ++i)
+        p->cooling_data.dust_size_distribution[material][i] = output[i];
     }
   }
 
