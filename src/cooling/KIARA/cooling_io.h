@@ -23,6 +23,7 @@
 /* Local includes */
 #include "cooling.h"
 #include "cooling_properties.h"
+#include "chemistry/KIARA/dust_parameters.h"
 #include "engine.h"
 #include "io_properties.h"
 
@@ -496,13 +497,6 @@ __attribute__((always_inline)) INLINE static void cooling_read_parameters(
   cooling->dust_growth_tauref = parser_get_opt_param_double(
       parameter_file, "KIARACooling:dust_growth_tauref", 1.0);
 
-  /* Two-size grain model parameters (Li+2021) */
-  cooling->dust_small_grainsize = parser_get_opt_param_double(
-      parameter_file, "KIARACooling:dust_small_grainsize", 0.005);
-
-  cooling->dust_large_grainsize = parser_get_opt_param_double(
-      parameter_file, "KIARACooling:dust_large_grainsize", 0.1);
-
   cooling->dust_grain_density = parser_get_opt_param_double(
       parameter_file, "KIARACooling:dust_grain_density", 2.4);
   if (!isfinite(cooling->dust_grain_density) || cooling->dust_grain_density <= 0.)
@@ -531,24 +525,9 @@ __attribute__((always_inline)) INLINE static void cooling_read_parameters(
   cooling->dust_small_fraction_AGB = parser_get_opt_param_double(
       parameter_file, "KIARACooling:dust_small_fraction_AGB", 0.27);
 
-  /* Logarithmic defaults between the legacy small and large radii. */
-  const double log_a_min = log(cooling->dust_small_grainsize);
-  const double log_a_max = log(cooling->dust_large_grainsize);
-  for (int bin = 0; bin < KIARA_DUST_N_BINS; ++bin) {
-    const double x = (double)bin / (double)(KIARA_DUST_N_BINS - 1);
-    cooling->dust_grain_sizes[bin] = exp(log_a_min + x * (log_a_max - log_a_min));
-  }
-  parser_get_opt_param_double_array(parameter_file,
-                                    "KIARACooling:dust_grain_sizes_micron",
-                                    KIARA_DUST_N_BINS,
-                                    cooling->dust_grain_sizes);
-  for (int bin = 0; bin < KIARA_DUST_N_BINS; ++bin) {
-    if (cooling->dust_grain_sizes[bin] <= 0.)
-      error("KIARACooling:dust_grain_sizes_micron entries must be positive");
-    if (bin > 0 && cooling->dust_grain_sizes[bin] <=
-                       cooling->dust_grain_sizes[bin - 1])
-      error("KIARACooling:dust_grain_sizes_micron must be strictly increasing");
-  }
+  kiara_dust_read_grid(parameter_file, cooling->dust_grain_sizes);
+  cooling->dust_small_grainsize = cooling->dust_grain_sizes[0];
+  cooling->dust_large_grainsize = cooling->dust_grain_sizes[KIARA_DUST_N_BINS - 1];
 
   cooling->cold_ISM_frac = parser_get_opt_param_double(
       parameter_file, "KIARACooling:cold_ISM_frac", 1.0);

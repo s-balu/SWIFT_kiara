@@ -8,6 +8,9 @@
 #ifndef KIARA_DUST_N_BINS
 #define KIARA_DUST_N_BINS 6
 #endif
+#if KIARA_DUST_N_BINS < 2
+#error "KIARA dust requires at least two size bins per material"
+#endif
 
 #define KIARA_DUST_N_MATERIALS 2
 #define KIARA_DUST_N_DISTRIBUTION_VALUES \

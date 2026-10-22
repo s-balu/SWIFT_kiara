@@ -182,7 +182,8 @@ EXTRA_testCustomMPI_DEPENDENCIES = ../src/.libs/libswiftsim_mpi.a
 endif
 
 # Files necessary for distribution
-EXTRA_DIST = testReading.sh makeInput.py testActivePair.sh \
+EXTRA_DIST = testKIARADustGrid.py testKIARADustGrid.c \
+             testReading.sh makeInput.py testActivePair.sh \
              test27cells.sh test27cellsPerturbed.sh testParser.sh testPeriodicBC.sh \
              testPeriodicBCPerturbed.sh test125cells.sh test125cellsPerturbed.sh testParserInput.yaml \
              difffloat.py tolerance_125_normal.dat tolerance_125_perturbed.dat \
