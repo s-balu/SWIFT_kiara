@@ -1344,6 +1344,20 @@ chemistry_transfer_part_to_bpart(struct chemistry_bpart_data *bp_data,
     bp_data->metal_mass[i] += p_data->metal_mass_fraction[i] * nibble_mass;
 }
 
+#if COOLING_GRACKLE_MODE >= 2
+/** Add accreted dust elements to the BH metal inventory, excluding the sum slot. */
+__attribute__((always_inline)) INLINE static void chemistry_add_dust_to_bpart(
+    struct chemistry_bpart_data *bp_data,
+    const struct cooling_part_data *dust, const double fraction) {
+  const double mass = fraction * dust->dust_mass;
+  for (int elem = chemistry_element_C; elem < chemistry_element_count; ++elem) {
+    const double element_mass = mass * dust->dust_mass_fraction[elem];
+    bp_data->metal_mass[elem] += element_mass;
+    bp_data->metal_mass_total += element_mass;
+  }
+}
+#endif
+
 /**
  * @brief Add the chemistry data of a black hole to another one.
  *
