@@ -183,6 +183,7 @@ endif
 
 # Files necessary for distribution
 EXTRA_DIST = testKIARADustGrid.py testKIARADustGrid.c testKIARADustSources.c \
+             testKIARADustEvolution.c testKIARADustCooling.py \
              testReading.sh makeInput.py testActivePair.sh \
              test27cells.sh test27cellsPerturbed.sh testParser.sh testPeriodicBC.sh \
              testPeriodicBCPerturbed.sh test125cells.sh test125cellsPerturbed.sh testParserInput.yaml \

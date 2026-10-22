@@ -14,7 +14,7 @@
  *
  * The existing KIARA radii are mass pivots, not bin edges. Collision products
  * are interpolated between these pivots to avoid suppressing coagulation on
- * the coarse six-bin grid. No extra particle fields or size bins are needed.
+ * a coarse radius grid. No extra particle fields or size bins are needed.
  */
 struct kiara_dust_collision_grid {
   double radius[KIARA_DUST_N_BINS];

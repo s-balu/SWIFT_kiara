@@ -89,6 +89,7 @@ include_HEADERS += chemistry/KIARA/dust.h
 include_HEADERS += chemistry/KIARA/dust_grid.h
 include_HEADERS += chemistry/KIARA/dust_parameters.h
 include_HEADERS += chemistry/KIARA/dust_sources.h
+include_HEADERS += chemistry/KIARA/dust_evolution.h
 include_HEADERS += chemistry/KIARA/dust_collisions.h
 include_HEADERS += chemistry/KIARA/dust_coagulation.h
 include_HEADERS += chemistry/KIARA/dust_shattering.h

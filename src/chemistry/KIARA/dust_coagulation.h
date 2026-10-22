@@ -46,7 +46,7 @@ static inline double kiara_dust_coagulation_threshold(
  * rate. No RMS-speed substitution or density/temperature switch overrides the
  * sticking threshold. Below threshold, the sticking probability is unity.
  * Representative-radius cross-sections and conservative interpolation of the
- * product mass adapt Li's equations 16, 18 and 21 to the existing six mass
+ * product mass adapt Li's equations 16, 18 and 21 to the configured mass
  * pivots.
  */
 static inline void kiara_dust_coagulation_operator_init(
@@ -73,7 +73,7 @@ static inline void kiara_dust_coagulation_operator_init(
       const double radius_sum = grid->radius[i] + grid->radius[j];
       op->kernel[i][j] = pi * radius_sum * radius_sum * speed;
       const double product_mass = grid->mass[i] + grid->mass[j];
-      /* Li Eq. 21: merge masses, interpolating onto KIARA's six pivots. */
+      /* Li Eq. 21: merge masses, interpolating onto the configured pivots. */
       kiara_dust_collision_deposit(grid, product_mass, product_mass,
                                    op->product[i][j]);
     }

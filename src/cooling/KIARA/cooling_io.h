@@ -523,7 +523,22 @@ __attribute__((always_inline)) INLINE static void cooling_read_parameters(
 
   cooling->dust_growth_Tref = parser_get_opt_param_double(
       parameter_file, "KIARACooling:dust_growth_Tref", 20.0);
-
+  if (cooling->use_grackle_dust_evol &&
+      (!isfinite(cooling->dust_growth_tauref) ||
+       cooling->dust_growth_tauref <= 0. ||
+       !isfinite(cooling->dust_growth_densref) ||
+       cooling->dust_growth_densref <= 0. ||
+       !isfinite(cooling->dust_growth_Tref) ||
+       cooling->dust_growth_Tref <= 0. || !isfinite(cooling->dust_sne_coeff) ||
+       cooling->dust_sne_coeff < 0. ||
+       !isfinite(cooling->dust_sne_shockspeed) ||
+       cooling->dust_sne_shockspeed <= 0. ||
+       !isfinite(cooling->dust_destruction_eff) ||
+       cooling->dust_destruction_eff < 0. ||
+       cooling->dust_destruction_eff > 1.))
+    error(
+        "KIARA dust requires positive finite growth references and SN speed, "
+        "nonnegative finite SN energy, and destruction efficiency in [0,1]");
 
   cooling->dust_small_fraction_SNII = parser_get_opt_param_double(
       parameter_file, "KIARACooling:dust_small_fraction_SNII", 0.005);

@@ -10,7 +10,7 @@
  * Integrate MASS analytically (dM/da proportional to a^-0.3) between geometric
  * bin boundaries. The end bins include unresolved fragments outside the grid:
  * no fragment mass is discarded or returned to gas. Grain number below the
- * minimum represented radius is unresolved. This is the six-bin approximation
+ * minimum represented radius is unresolved. This is the mass-grid approximation
  * to Hirashita & Yan (2009), equations 12--14, adopted by Li (2021).
  */
 static inline void kiara_dust_shattering_deposit_fragments(

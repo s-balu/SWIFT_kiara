@@ -1,5 +1,6 @@
 """Build standalone dust checks for several bin counts without Grackle or GSL."""
 import os
+import runpy
 from pathlib import Path
 import shlex
 import subprocess
@@ -18,3 +19,5 @@ with tempfile.TemporaryDirectory(prefix="kiara-dust-grid-") as scratch:
                 check=True,
             )
             subprocess.run([str(binary)], check=True)
+
+runpy.run_path(str(root / "tests/testKIARADustCooling.py"), run_name="__main__")

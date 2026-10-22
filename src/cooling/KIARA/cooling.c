@@ -52,6 +52,7 @@ extern chemistry_data *grackle_data;
 /* Local includes. */
 #include "chemistry.h"
 #include "chemistry/KIARA/dust_coagulation.h"
+#include "chemistry/KIARA/dust_evolution.h"
 #include "chemistry/KIARA/dust_shattering.h"
 #include "chemistry/KIARA/dust_sources.h"
 #include "cooling_io.h"
@@ -1298,130 +1299,91 @@ __attribute__((always_inline)) INLINE void cooling_sputter_dust(
     const struct cosmology *restrict cosmo,
     const struct cooling_function_data *restrict cooling,
     struct part *restrict p, struct xpart *restrict xp, const double dt) {
+  if (!cooling->use_grackle_dust_evol || p->cooling_data.dust_mass <= 0.f ||
+      dt <= 0.)
+    return;
+  const float u_phys = hydro_get_physical_internal_energy(p, xp, cosmo);
+  const double temperature =
+      cooling_convert_u_to_temp(u_phys, xp->cooling_data.e_frac, cooling, p,
+                                xp) *
+      units_cgs_conversion_factor(us, UNIT_CONV_TEMPERATURE);
+  if (temperature <= 1.e4) return;
+  const double rho_cgs = hydro_get_physical_density(p, cosmo) *
+                         units_cgs_conversion_factor(us, UNIT_CONV_DENSITY);
+  if (rho_cgs <= 0.) return;
+  cooling_init_dust_distribution(cooling, p);
 
-  /* Do dust destruction in stream particle */
-  if (cooling->use_grackle_dust_evol && p->cooling_data.dust_mass > 0.f) {
-    const float u_phys = hydro_get_physical_internal_energy(p, xp, cosmo);
-    const float Tstream = cooling_convert_u_to_temp(
-        u_phys, xp->cooling_data.e_frac, cooling, p, xp);
-    const double Tstream_K =
-        Tstream * units_cgs_conversion_factor(us, UNIT_CONV_TEMPERATURE);
-
-    /* Sputtering negligible at low-T */
-    if (Tstream_K > 1.e4) {
-      const double rho_cgs = hydro_get_physical_density(p, cosmo) *
-                             units_cgs_conversion_factor(us, UNIT_CONV_DENSITY);
-
-      /* Effective radius of the framework distribution. */
-      double a_eff = 0., distribution_sum = 0.;
-      for (int material = 0; material < KIARA_DUST_N_MATERIALS; ++material)
-        for (int bin = 0; bin < KIARA_DUST_N_BINS; ++bin) {
-          const double weight =
-              p->cooling_data.dust_size_distribution[material][bin];
-          a_eff += weight * cooling->dust_grain_sizes[bin];
-          distribution_sum += weight;
-        }
-      if (distribution_sum <= 0.) {
-        cooling_init_dust_distribution(cooling, p);
-        a_eff = 0.;
-        for (int bin = 0; bin < KIARA_DUST_N_BINS; ++bin)
-          a_eff += cooling->dust_initial_distribution[bin] *
-                   cooling->dust_grain_sizes[bin];
-      } else {
-        a_eff /= distribution_sum;
-      }
-
-      /* sputtering timescale, Tsai & Mathews (1995) */
-      const double tsp = 1.7e8 * 3.15569251e7 /
-                         units_cgs_conversion_factor(us, UNIT_CONV_TIME) *
-                         (a_eff / 0.1) * (1.e-27 / rho_cgs) *
-                         (pow(2.e6 / Tstream_K, 2.5) + 1.0);
-
-      const float dust_mass_old = p->cooling_data.dust_mass;
-
-      /* Update dust mass but limit the destruction */
-      p->cooling_data.dust_mass -=
-          dust_mass_old * (1.f - exp(-3.f * min(dt / tsp, 5.f)));
-      if (p->cooling_data.dust_mass < 0.5f * dust_mass_old) {
-        p->cooling_data.dust_mass = 0.5f * dust_mass_old;
-      }
-
-#ifdef FIREHOSE_DEBUG_CHECKS
-      message(
-          "FIREHOSE_SPUT: id=%lld mdust=%g mdustnew=%g T=%g rho=%g "
-          "tsp_dt_ratio=%g",
-          p->id, dust_mass_old, p->cooling_data.dust_mass, Tstream,
-          rho_cgs / 1.673e-24, /* units of mp */
-          tsp / dt);
-#endif
-      /* Dust mass returned to the gas phase */
-      const float dust_mass_lost = dust_mass_old - p->cooling_data.dust_mass;
-      p->chemistry_data.metal_mass_fraction_total = 0.f;
-
-      for (int elem = 0; elem < chemistry_element_count; ++elem) {
-        if (elem == chemistry_element_H || elem == chemistry_element_He)
-          continue;
-
-        /* dust_mass_fraction is the fraction of the dust mass in each
-         * element; sputtering does not change the grain composition, so
-         * it is left unchanged and each element loses the same fraction. */
-        const float Z_elem_old = p->chemistry_data.metal_mass_fraction[elem];
-        const float elem_mass_old = Z_elem_old * hydro_get_mass(p);
-
-        /* This is the positive amount of metal mass to add since we
-         * are losing dust mass when sputtering. */
-        const float delta_metal_mass_elem =
-            p->cooling_data.dust_mass_fraction[elem] * dust_mass_lost;
-        const float elem_mass_new = elem_mass_old + delta_metal_mass_elem;
-        const float Z_elem_new = elem_mass_new / hydro_get_mass(p);
-
-        p->chemistry_data.metal_mass_fraction[elem] = Z_elem_new;
-
-        /* Sum up to get the new Z value */
-        p->chemistry_data.metal_mass_fraction_total += Z_elem_new;
-      }
-
-      /* Make sure that X + Y + Z + D = 1 (Z is gas-phase only) */
-      const float Y_He =
-          p->chemistry_data.metal_mass_fraction[chemistry_element_He];
-      p->chemistry_data.metal_mass_fraction[chemistry_element_H] =
-          1.f - Y_He - p->chemistry_data.metal_mass_fraction_total -
-          p->cooling_data.dust_mass / hydro_get_mass(p);
-
-      /* Make sure H fraction does not go out of bounds */
-      if (p->chemistry_data.metal_mass_fraction[chemistry_element_H] > 1.f ||
-          p->chemistry_data.metal_mass_fraction[chemistry_element_H] < 0.f) {
-        for (int i = chemistry_element_H; i < chemistry_element_count; i++) {
-          warning("\telem[%d] is %g", i,
-                  p->chemistry_data.metal_mass_fraction[i]);
-        }
-
-        error(
-            "Hydrogen fraction exeeds unity or is negative for"
-            " particle id=%lld due to dust sputtering",
-            p->id);
-      }
-
-      /* Move a fraction of each bin to the immediately smaller bin as grains
-       * are sputtered below that bin's representative radius. */
-      for (int material = 0; material < KIARA_DUST_N_MATERIALS; ++material) {
-        for (int bin = KIARA_DUST_N_BINS - 1; bin > 0; --bin) {
-          const double tsp_bin = 1.7e8 * 3.15569251e7 /
-                                 units_cgs_conversion_factor(us, UNIT_CONV_TIME) *
-                                 (cooling->dust_grain_sizes[bin] / 0.1) *
-                                 (1.e-27 / rho_cgs) *
-                                 (pow(2.e6 / Tstream_K, 2.5) + 1.0);
-          const float old_bin =
-              p->cooling_data.dust_size_distribution[material][bin];
-          const float moved = old_bin * (1.f - expf(-dt / tsp_bin));
-          p->cooling_data.dust_size_distribution[material][bin] -= moved;
-          p->cooling_data.dust_size_distribution[material][bin - 1] += moved;
-        }
-      }
-      kiara_dust_distribution_normalize(
-          p->cooling_data.dust_size_distribution);
-    }
+  /* Li Eqs. 11--12: tau_sp is proportional to a, so erosion removes a fixed
+   * physical radius per step. */
+  const double tau_ref =
+      1.7e8 * 3.15569251e7 / units_cgs_conversion_factor(us, UNIT_CONV_TIME) *
+      (1.e-27 / rho_cgs) * (pow(2.e6 / temperature, 2.5) + 1.);
+  const double radius_lost = 0.1 * dt / tau_ref;
+  struct cooling_part_data *co = &p->cooling_data;
+  double composition_sum = 0.;
+  for (int elem = chemistry_element_C; elem < chemistry_element_count; ++elem)
+    composition_sum += co->dust_mass_fraction[elem];
+  if (composition_sum <= 0.)
+    error(
+        "Cannot sputter positive KIARA dust mass without elemental "
+        "composition");
+  const double carbon =
+      co->dust_mass_fraction[chemistry_element_C] / composition_sum;
+  const double material_fraction[KIARA_DUST_N_MATERIALS] = {carbon,
+                                                            1. - carbon};
+  double evolved[KIARA_DUST_N_MATERIALS][KIARA_DUST_N_BINS];
+  double survival[KIARA_DUST_N_MATERIALS], remaining = 0.;
+  for (int material = 0; material < KIARA_DUST_N_MATERIALS; ++material) {
+    double row_sum = 0., input[KIARA_DUST_N_BINS];
+    for (int i = 0; i < KIARA_DUST_N_BINS; ++i)
+      row_sum += co->dust_size_distribution[material][i];
+    for (int i = 0; i < KIARA_DUST_N_BINS; ++i)
+      input[i] =
+          material_fraction[material] *
+          (row_sum > 0. ? co->dust_size_distribution[material][i] / row_sum
+                        : cooling->dust_initial_distribution[i]);
+    const double mass =
+        kiara_dust_radius_remap(cooling->dust_grain_sizes, input, -radius_lost,
+                                1., 1, evolved[material]);
+    if (!isfinite(mass)) error("Non-finite KIARA dust sputtering update");
+    survival[material] = material_fraction[material] > 0.
+                             ? fmin(mass / material_fraction[material], 1.)
+                             : 0.;
+    remaining += material_fraction[material] * survival[material];
   }
+
+  const double old_dust_mass = co->dust_mass;
+  co->dust_mass = old_dust_mass * remaining;
+  p->chemistry_data.metal_mass_fraction_total = 0.f;
+  for (int elem = chemistry_element_C; elem < chemistry_element_count; ++elem) {
+    const int material = elem == chemistry_element_C ? kiara_dust_carbonaceous
+                                                     : kiara_dust_silicate;
+    const double old_element_mass =
+        old_dust_mass * co->dust_mass_fraction[elem] / composition_sum;
+    const double retained =
+        co->dust_mass > 0.f ? old_element_mass * survival[material] : 0.;
+    p->chemistry_data.metal_mass_fraction[elem] +=
+        (old_element_mass - retained) / hydro_get_mass(p);
+    p->chemistry_data.metal_mass_fraction_total +=
+        p->chemistry_data.metal_mass_fraction[elem];
+    co->dust_mass_fraction[elem] =
+        co->dust_mass > 0.f ? retained / (old_dust_mass * remaining) : 0.f;
+  }
+  co->dust_mass_fraction[0] = co->dust_mass > 0.f ? 1.f : 0.f;
+  co->dust_mass_fraction[chemistry_element_He] = 0.f;
+  for (int material = 0; material < KIARA_DUST_N_MATERIALS; ++material)
+    for (int i = 0; i < KIARA_DUST_N_BINS; ++i)
+      co->dust_size_distribution[material][i] =
+          co->dust_mass > 0.f ? evolved[material][i] / remaining : 0.f;
+  kiara_dust_distribution_normalize(co->dust_size_distribution);
+  const float helium =
+      p->chemistry_data.metal_mass_fraction[chemistry_element_He];
+  p->chemistry_data.metal_mass_fraction[chemistry_element_H] =
+      1.f - helium - p->chemistry_data.metal_mass_fraction_total -
+      co->dust_mass / hydro_get_mass(p);
+  if (p->chemistry_data.metal_mass_fraction[chemistry_element_H] < 0.f ||
+      p->chemistry_data.metal_mass_fraction[chemistry_element_H] > 1.f)
+    error("Hydrogen fraction out of bounds after KIARA dust sputtering");
 }
 
 /**
@@ -1444,12 +1406,13 @@ static void cooling_evolve_grain_size(
     const struct cooling_function_data *restrict cooling,
     struct part *restrict p, struct xpart *restrict xp, const double dt) {
 
-  if (!cooling->use_grackle_dust_evol || p->cooling_data.dust_mass <= 0.f)
+  if (!cooling->use_grackle_dust_evol || p->cooling_data.dust_mass <= 0.f ||
+      dt <= 0.)
     return;
 
   cooling_init_dust_distribution(cooling, p);
 
-  /* --- 1. Accretion: small grains grow past a_crit -> large bin --- */
+  /* Accretion changes physical radii before remapping to the grid. */
   /* Accretion timescale (Eq. 7, Li+2021):
    * t_accr = t_ref * (a/a_ref) * (rho_ref/rho_g) * (T_ref/T_g)^1/2 *
    * (Z_ref/Z_g)
@@ -1478,16 +1441,23 @@ static void cooling_evolve_grain_size(
         (cooling->dust_growth_densref / rho_cgs) *
         sqrt(cooling->dust_growth_Tref / T_g) * (Z_sun / Z_gas);
 
+    /* Li Eqs. 6--7: da/dt = a_ref/tau_base, independent of the numerical bin
+     * spacing. */
+    const double radius_gained = a_ref * dt / tau_base;
     for (int material = 0; material < KIARA_DUST_N_MATERIALS; ++material) {
-      for (int bin = 0; bin < KIARA_DUST_N_BINS - 1; ++bin) {
-        const double tau_bin =
-            tau_base * (cooling->dust_grain_sizes[bin] / a_ref);
-        const float old_bin =
-            p->cooling_data.dust_size_distribution[material][bin];
-        const float moved = old_bin * (1.f - expf(-min(dt / tau_bin, 5.f)));
-        p->cooling_data.dust_size_distribution[material][bin] -= moved;
-        p->cooling_data.dust_size_distribution[material][bin + 1] += moved;
+      double input[KIARA_DUST_N_BINS], output[KIARA_DUST_N_BINS], old_sum = 0.;
+      for (int i = 0; i < KIARA_DUST_N_BINS; ++i) {
+        input[i] = p->cooling_data.dust_size_distribution[material][i];
+        old_sum += input[i];
       }
+      const double new_sum = kiara_dust_radius_remap(
+          cooling->dust_grain_sizes, input, radius_gained, 1., 1, output);
+      if (!isfinite(new_sum)) error("Non-finite KIARA dust growth update");
+      /* Grackle owns accreted mass and elemental depletion; update only each
+       * material's size shape here. */
+      for (int i = 0; i < KIARA_DUST_N_BINS; ++i)
+        p->cooling_data.dust_size_distribution[material][i] =
+            new_sum > 0. ? output[i] * old_sum / new_sum : 0.;
     }
   }
 
@@ -1524,7 +1494,7 @@ static void cooling_evolve_grain_size(
   kiara_dust_distribution_normalize(p->cooling_data.dust_size_distribution);
 }
 
-/** Apply Li et al. (2021), Eqs. 16--21, to KIARA's independent six-bin
+/** Apply Li et al. (2021), Eqs. 16--21, to KIARA's configured size-grid
  * materials carried by gas particles, using Grackle's selected local phase. */
 static void cooling_evolve_dust_collisions(
     const struct unit_system *restrict us,

@@ -59,3 +59,35 @@ produce a warning if supplied. Both materials use the same source spectrum
 for a given channel; their masses and subsequent size distributions remain
 independent. The existing 100 Myr stellar-age channel classification remains
 an approximation; channel separation using SSP tables is unchanged.
+
+Radius evolution
+----------------
+
+Growth applies ``a_new = a + a_ref * dt / tau_base`` from Li et al. (2021),
+equations 6--7, with ``a_ref = 0.1 micron`` a physical reference rather than
+a grid endpoint. Each grain's mass changes as ``a_new**3`` before conservative
+deposition. Only the size shape within each material is updated here: Grackle
+continues to own the accreted mass and elemental depletion, using its separate
+representative grain radius. This remains an approximate coupling rather than
+a fully size-resolved gas-metal accretion calculation.
+
+Thermal sputtering applies the analytic radius decrement implied by equations
+11--12 under the local conditions held fixed for the step. Surviving mass is
+computed from the remaining grain volume in each bin. Carbon and non-carbon
+elemental losses are returned to the corresponding gas inventories; the
+previous total-mass destruction cap and adjacent-bin shuffle are removed.
+Positive sub-grid radii retain their surviving mass in the smallest bin;
+zero-radius grains have been physically destroyed. Each transport pass uses
+the old distribution once, so grains cannot be processed repeatedly while
+looping over newly populated bins.
+
+Validation
+----------
+
+Run ``python3 tests/testKIARADustGrid.py`` from the repository root to compile
+standalone checks with 2, 3, 6, 12 and 41 bins under address and undefined
+behaviour sanitizers. The checks include nonuniform grids, analytic source
+integrals, physical-radius remapping, collision boundary retention, and the
+actual cooling dust routines with controlled hydro/unit adapters at scale
+factors 1, 0.5 and 0.1. These do not link Grackle or GSL and do not replace
+a full configured KIARA build or an evolution convergence study.
