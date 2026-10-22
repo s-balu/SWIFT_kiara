@@ -22,6 +22,8 @@
 #include "feedback.h"
 
 /* Local includes. */
+#include "chemistry/KIARA/dust_parameters.h"
+#include "chemistry/KIARA/dust_sources.h"
 #include "hydro_properties.h"
 #include "inline.h"
 #include "random.h"
@@ -1903,22 +1905,31 @@ void feedback_props_init(struct feedback_props *fp,
 #if COOLING_GRACKLE_MODE >= 2
   fp->max_dust_fraction = parser_get_opt_param_double(
       params, "KIARAFeedback:max_dust_fraction", 0.9);
-  fp->dust_small_fraction_SNII = parser_get_opt_param_double(
-      params, "KIARAFeedback:dust_small_fraction_SNII", 0.005);
-  fp->dust_small_fraction_AGB = parser_get_opt_param_double(
-      params, "KIARAFeedback:dust_small_fraction_AGB", 0.27);
-  /* Default source distributions are flat in mass per logarithmic bin.  They
-   * are framework metadata only and are never passed to Grackle. */
+  const int legacy_sn =
+      parser_does_param_exist(params, "KIARAFeedback:dust_small_fraction_SNII");
+  const int legacy_agb =
+      parser_does_param_exist(params, "KIARAFeedback:dust_small_fraction_AGB");
+  fp->dust_small_fraction_SNII =
+      legacy_sn ? parser_get_param_double(
+                      params, "KIARAFeedback:dust_small_fraction_SNII")
+                : 0.005;
+  fp->dust_small_fraction_AGB =
+      legacy_agb ? parser_get_param_double(
+                       params, "KIARAFeedback:dust_small_fraction_AGB")
+                 : 0.27;
+  if (legacy_sn || legacy_agb)
+    warning(
+        "KIARA dust_small_fraction_SNII/AGB are obsolete; configure physical "
+        "dust source spectra instead");
+  double radius[KIARA_DUST_N_BINS], sn_shape[KIARA_DUST_N_BINS],
+      agb_shape[KIARA_DUST_N_BINS];
+  kiara_dust_read_grid(params, radius);
+  kiara_dust_read_source(params, 0, radius, sn_shape);
+  kiara_dust_read_source(params, 1, radius, agb_shape);
   for (int material = 0; material < KIARA_DUST_N_MATERIALS; ++material) {
     for (int bin = 0; bin < KIARA_DUST_N_BINS; ++bin) {
-      const double sn_small = fmin(fmax(fp->dust_small_fraction_SNII, 0.f), 1.f);
-      const double agb_small = fmin(fmax(fp->dust_small_fraction_AGB, 0.f), 1.f);
-      fp->dust_size_distribution_SNII[material][bin] =
-          (bin == 0) ? sn_small : (1. - sn_small) /
-                                      (double)(KIARA_DUST_N_BINS - 1);
-      fp->dust_size_distribution_AGB[material][bin] =
-          (bin == 0) ? agb_small : (1. - agb_small) /
-                                      (double)(KIARA_DUST_N_BINS - 1);
+      fp->dust_size_distribution_SNII[material][bin] = sn_shape[bin];
+      fp->dust_size_distribution_AGB[material][bin] = agb_shape[bin];
     }
   }
 #endif

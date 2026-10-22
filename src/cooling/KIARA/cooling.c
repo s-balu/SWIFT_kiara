@@ -53,6 +53,7 @@ extern chemistry_data *grackle_data;
 #include "chemistry.h"
 #include "chemistry/KIARA/dust_coagulation.h"
 #include "chemistry/KIARA/dust_shattering.h"
+#include "chemistry/KIARA/dust_sources.h"
 #include "cooling_io.h"
 #include "entropy_floor.h"
 #include "error.h"
@@ -66,28 +67,26 @@ extern chemistry_data *grackle_data;
 
 #if COOLING_GRACKLE_MODE >= 2
 /* Keep framework-only grain-size state valid when loading legacy dust fields. */
-static void cooling_init_dust_distribution(struct part *p) {
+static void cooling_init_dust_distribution(
+    const struct cooling_function_data *cooling, struct part *p) {
   if (p->cooling_data.dust_mass <= 0.f) {
     kiara_dust_distribution_zero(p->cooling_data.dust_size_distribution);
     return;
   }
-  if (kiara_dust_distribution_sum(p->cooling_data.dust_size_distribution) >
-      0.f)
+  if (kiara_dust_distribution_sum(p->cooling_data.dust_size_distribution) > 0.f)
     return;
 
   const float dust_total = p->cooling_data.dust_mass_fraction[0];
-  const float f_carbon = dust_total > 0.f
-                             ? fminf(fmaxf(p->cooling_data.dust_mass_fraction[
-                                              chemistry_element_C] /
-                                              dust_total,
-                                          0.f),
-                                    1.f)
-                             : 0.5f;
-  const int last = KIARA_DUST_N_BINS - 1;
-  p->cooling_data.dust_size_distribution[kiara_dust_carbonaceous][last] =
-      f_carbon;
-  p->cooling_data.dust_size_distribution[kiara_dust_silicate][last] =
-      1.f - f_carbon;
+  const float f_carbon =
+      dust_total > 0.f
+          ? fminf(
+                fmaxf(p->cooling_data.dust_mass_fraction[chemistry_element_C] /
+                          dust_total,
+                      0.f),
+                1.f)
+          : 0.5f;
+  kiara_dust_distribution_seed(cooling->dust_initial_distribution, f_carbon,
+                               p->cooling_data.dust_size_distribution);
 }
 #endif
 
@@ -330,6 +329,8 @@ void cooling_print_backend(const struct cooling_function_data *cooling) {
     message("Dust shattering enabled: %d", cooling->dust_shattering);
     message("Dust grain density [g/cm^3]: %g", cooling->dust_grain_density);
     message("Dust Grackle grain radius [micron]: %g", cooling->dust_grainsize);
+    message("Dust initial source spectrum: %s",
+            cooling->dust_initial_source ? "AGB" : "SNII");
     message("Dust growth reference timescale [Gyr]: %g",
             cooling->dust_growth_tauref);
     message("Dust growth reference density [g/cm^3]: %g",
@@ -745,7 +746,7 @@ void cooling_copy_from_grackle2(
         p->cooling_data.dust_mass_fraction[i] = 0.f;
       }
     }
-    cooling_init_dust_distribution(p);
+    cooling_init_dust_distribution(cooling, p);
     /* Match Grackle's elemental dust inventory while preserving each material's
      * existing size shape. */
     const float dust_total = p->cooling_data.dust_mass_fraction[0];
@@ -760,7 +761,7 @@ void cooling_copy_from_grackle2(
       for (int material = 0; material < KIARA_DUST_N_MATERIALS; ++material)
         kiara_dust_distribution_rescale_material(
             p->cooling_data.dust_size_distribution[material],
-            material_fraction[material]);
+            material_fraction[material], cooling->dust_initial_distribution);
     }
   }
 }
@@ -1321,8 +1322,11 @@ __attribute__((always_inline)) INLINE void cooling_sputter_dust(
           distribution_sum += weight;
         }
       if (distribution_sum <= 0.) {
-        cooling_init_dust_distribution(p);
-        a_eff = cooling->dust_grain_sizes[KIARA_DUST_N_BINS - 1];
+        cooling_init_dust_distribution(cooling, p);
+        a_eff = 0.;
+        for (int bin = 0; bin < KIARA_DUST_N_BINS; ++bin)
+          a_eff += cooling->dust_initial_distribution[bin] *
+                   cooling->dust_grain_sizes[bin];
       } else {
         a_eff /= distribution_sum;
       }
@@ -1443,7 +1447,7 @@ static void cooling_evolve_grain_size(
   if (!cooling->use_grackle_dust_evol || p->cooling_data.dust_mass <= 0.f)
     return;
 
-  cooling_init_dust_distribution(p);
+  cooling_init_dust_distribution(cooling, p);
 
   /* --- 1. Accretion: small grains grow past a_crit -> large bin --- */
   /* Accretion timescale (Eq. 7, Li+2021):
@@ -1567,7 +1571,7 @@ static void cooling_evolve_dust_collisions(
   if (!kiara_dust_collision_grid_init(&grid, cooling->dust_grain_sizes,
                                       cooling->dust_grain_density))
     error("Invalid KIARA dust collision grid");
-  cooling_init_dust_distribution(p);
+  cooling_init_dust_distribution(cooling, p);
 
   /* Reproducible draws from particle ID and physical simulation time. */
   uint64_t time_bits;
@@ -1786,9 +1790,10 @@ void cooling_init_chemistry(
     /* Dust holds the remaining init_dust_to_gas of the self-enriched metals */
     p->cooling_data.dust_mass =
         init_dust_to_gas * cooling->self_enrichment_metallicity * p->mass;
-    kiara_dust_distribution_powerlaw(
-        p->cooling_data.dust_size_distribution,
-        p->cooling_data.dust_mass_fraction[chemistry_element_C]);
+    kiara_dust_distribution_seed(
+        cooling->dust_initial_distribution,
+        p->cooling_data.dust_mass_fraction[chemistry_element_C],
+        p->cooling_data.dust_size_distribution);
 
     p->chemistry_data.metal_mass_fraction[chemistry_element_He] =
         cooling->chemistry.SolarAbundances[0];

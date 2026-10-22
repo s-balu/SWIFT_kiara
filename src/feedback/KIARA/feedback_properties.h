@@ -404,7 +404,7 @@ struct feedback_props {
   /*! max fraction of metals locked into dust */
   float max_dust_fraction;
 
-  /*! Fraction of newly produced dust in small grains (two-size model) */
+  /*! Deprecated input values retained for restart layout compatibility. */
   float dust_small_fraction_SNII;
   float dust_small_fraction_AGB;
 

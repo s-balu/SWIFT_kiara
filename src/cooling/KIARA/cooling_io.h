@@ -64,6 +64,11 @@ __attribute__((always_inline)) INLINE static void cooling_write_flavour(
   io_write_attribute_i(h_grp, "KIARA dust shattering", cooling->dust_shattering);
   io_write_attribute_d(h_grp, "KIARA dust grain density [g/cm^3]",
                        cooling->dust_grain_density);
+  io_write_attribute_s(h_grp, "KIARA dust initial source",
+                       cooling->dust_initial_source ? "AGB" : "SNII");
+  io_write_attribute(h_grp, "KIARA dust initial grain-size mass fractions",
+                     DOUBLE, cooling->dust_initial_distribution,
+                     KIARA_DUST_N_BINS);
 #endif
 }
 #endif
@@ -519,6 +524,7 @@ __attribute__((always_inline)) INLINE static void cooling_read_parameters(
   cooling->dust_growth_Tref = parser_get_opt_param_double(
       parameter_file, "KIARACooling:dust_growth_Tref", 20.0);
 
+
   cooling->dust_small_fraction_SNII = parser_get_opt_param_double(
       parameter_file, "KIARACooling:dust_small_fraction_SNII", 0.005);
 
@@ -528,6 +534,9 @@ __attribute__((always_inline)) INLINE static void cooling_read_parameters(
   kiara_dust_read_grid(parameter_file, cooling->dust_grain_sizes);
   cooling->dust_small_grainsize = cooling->dust_grain_sizes[0];
   cooling->dust_large_grainsize = cooling->dust_grain_sizes[KIARA_DUST_N_BINS - 1];
+  cooling->dust_initial_source =
+      kiara_dust_read_initial_source(parameter_file, cooling->dust_grain_sizes,
+                                     cooling->dust_initial_distribution);
 
   cooling->cold_ISM_frac = parser_get_opt_param_double(
       parameter_file, "KIARACooling:cold_ISM_frac", 1.0);

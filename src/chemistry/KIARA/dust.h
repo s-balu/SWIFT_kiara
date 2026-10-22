@@ -42,15 +42,18 @@ kiara_dust_distribution_sum(
   return sum;
 }
 
-/** Rescale a material's size shape, seeding an empty row in the largest bin. */
+/** Rescale a material's size shape, using the supplied physical seed for an empty row. */
 static inline void kiara_dust_distribution_rescale_material(
-    float distribution[KIARA_DUST_N_BINS], const float material_fraction) {
+    float distribution[KIARA_DUST_N_BINS], const float material_fraction,
+    const double seed[KIARA_DUST_N_BINS]) {
   double sum = 0.;
   for (int bin = 0; bin < KIARA_DUST_N_BINS; ++bin) sum += distribution[bin];
   const double scale = sum > 0. ? material_fraction / sum : 0.;
   for (int bin = 0; bin < KIARA_DUST_N_BINS; ++bin)
     distribution[bin] *= scale;
-  if (sum == 0.) distribution[KIARA_DUST_N_BINS - 1] = material_fraction;
+  if (sum == 0.)
+    for (int bin = 0; bin < KIARA_DUST_N_BINS; ++bin)
+      distribution[bin] = material_fraction * seed[bin];
 }
 
 /** Clamp negative entries and normalize a non-empty distribution to unity. */
@@ -71,21 +74,6 @@ kiara_dust_distribution_normalize(
       for (int bin = 0; bin < KIARA_DUST_N_BINS; ++bin)
         distribution[material][bin] *= sum_inv;
   }
-}
-
-/* Assign flat mass per logarithmic bin, weighted by the carbonaceous fraction. */
-static inline void kiara_dust_distribution_powerlaw(
-    float distribution[KIARA_DUST_N_MATERIALS][KIARA_DUST_N_BINS],
-    const float carbon_fraction) {
-  kiara_dust_distribution_zero(distribution);
-  for (int material = 0; material < KIARA_DUST_N_MATERIALS; ++material) {
-    const float material_fraction =
-        material == kiara_dust_carbonaceous ? carbon_fraction
-                                           : 1.f - carbon_fraction;
-    for (int bin = 0; bin < KIARA_DUST_N_BINS; ++bin)
-      distribution[material][bin] = material_fraction / (float)KIARA_DUST_N_BINS;
-  }
-  kiara_dust_distribution_normalize(distribution);
 }
 
 #endif /* SWIFT_KIARA_DUST_H */

@@ -151,13 +151,17 @@ struct cooling_function_data {
   /*! Dust grain size (micron) */
   double dust_grainsize;
 
+  /*! Source spectrum for dust with no size history (0=SNII, 1=AGB). */
+  int dust_initial_source;
+  double dust_initial_distribution[KIARA_DUST_N_BINS];
+
   /*! Reference density for dust growth (g/cm^3) */
   double dust_growth_densref;
 
   /*! Dust growth time-scale at the reference density (Gyr) */
   double dust_growth_tauref;
 
-  /*! Two-size grain model parameters (Li+2021, Hirashita 2015) */
+  /*! Legacy grid endpoints and dust microphysics parameters. */
   double dust_small_grainsize;
   double dust_large_grainsize;
   double dust_grain_density;
