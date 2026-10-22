@@ -1450,6 +1450,11 @@ runner_iact_nonsym_bh_gas_feedback(
       }
 
       pj->chemistry_data.metal_mass_fraction_total = new_Z_total;
+#ifdef COOLING_KIARA
+      /* Complete destruction also clears the composition sum and size bins. */
+      pj->cooling_data.dust_mass_fraction[chemistry_element_H] = 0.f;
+      kiara_dust_distribution_zero(pj->cooling_data.dust_size_distribution);
+#endif
     }
 #endif
 
