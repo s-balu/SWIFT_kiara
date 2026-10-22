@@ -50,7 +50,7 @@ struct feedback_part_data {
   int heating_limiter_count;
 
 #if COOLING_GRACKLE_MODE >= 2
-  /*! Number of SNe (of any type) going off in nearby stars */
+  /*! Pending SN count deposited by neighbouring stars */
   float SNe_ThisTimeStep;
 #endif
 };
@@ -108,7 +108,7 @@ struct feedback_spart_data {
   /*! Luminosity emitted by star in Habing band (912-1112 A) */
   float lum_habing;
 
-  /*! Number of SNe (of any type) going off within star during this step */
+  /*! Expected SN count over this star's enrichment interval */
   double SNe_ThisTimeStep;
 
   /*! Cumulative number of SNe that have gone off in this star from chem5 (for

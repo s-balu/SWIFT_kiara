@@ -768,8 +768,7 @@ feedback_do_chemical_enrichment_of_gas_around_star(
   }
 
 #if COOLING_GRACKLE_MODE >= 2
-  /* Compute kernel-smoothed contribution to number of SNe going off
-   * this timestep */
+  /* Deposit the kernel-weighted SN count from this stellar interval. */
   pj->feedback_data.SNe_ThisTimeStep +=
       si->feedback_data.SNe_ThisTimeStep * Omega_frac;
   pj->feedback_data.SNe_ThisTimeStep =

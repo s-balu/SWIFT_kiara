@@ -831,9 +831,8 @@ __attribute__((always_inline)) INLINE static void feedback_prepare_feedback(
   sp->last_enrichment_time = (with_cosmology) ? cosmo->a : time;
 
 #if COOLING_GRACKLE_MODE >= 2
-  /* Update the number of SNe that have gone off, used in Grackle dust model.
-     Actually stores SNe rate */
-  sp->feedback_data.SNe_ThisTimeStep = N_SNe / dt;
+  /* Store the SN count for this enrichment interval for kernel deposition. */
+  sp->feedback_data.SNe_ThisTimeStep = N_SNe;
   sp->feedback_data.SNe_Total += N_SNe;
 #endif
 

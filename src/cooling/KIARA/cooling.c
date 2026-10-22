@@ -453,10 +453,9 @@ void cooling_copy_to_grackle2(
     species_densities[20] =
         p->cooling_data.dust_mass / p->mass * species_densities[12];
     data->dust_density = &species_densities[20];
-    species_densities[21] = p->feedback_data.SNe_ThisTimeStep * dt / p->mass *
-                            species_densities[12];
-    /* need to pass the number of SNe per volume of particle;
-     * recall SNe_ThisTimeStep is the SNe rate */
+    species_densities[21] = cooling_get_SNe_count_for_step(cooling, p, dt) /
+                            p->mass * species_densities[12];
+    /* Grackle expects the SN count assigned to this gas particle per volume. */
 
     // if (species_densities[21] > 1.e15) message("SNe_density: %g %g %g
     // %g\n",p->mass, species_densities[12], p->feedback_data.SNe_ThisTimeStep,
@@ -1470,11 +1469,11 @@ static void cooling_evolve_grain_size(
   }
 
   /* SN shock processing uses the same swept gas mass as scalar destruction. */
-  /* Uses SNe_ThisTimeStep already tracked per particle.
-   * Swept mass from Sedov-Taylor (Eq. 14, Li+2021):
+  /* Use the SN count assigned by feedback; swept mass follows Li Eq. 14:
    * M_s = 6800 * E_SN,51 * (v_s / 100 km/s)^-2  M_sun
    */
-  if (p->feedback_data.SNe_ThisTimeStep > 0.f) {
+  const double N_SNe = cooling_get_SNe_count_for_step(cooling, p, dt);
+  if (N_SNe > 0.) {
     const double M_gas = hydro_get_mass(p);
     const double v_s = cooling->dust_sne_shockspeed;
     /* Use the same SN energy coefficient as the Grackle dust model. */
@@ -1484,7 +1483,6 @@ static void cooling_evolve_grain_size(
         1.989e33 / units_cgs_conversion_factor(us, UNIT_CONV_MASS);
     const double M_swept = M_swept_Msun * Msun_to_code;
 
-    const double N_SNe = p->feedback_data.SNe_ThisTimeStep * dt;
     const double epsilon = cooling->dust_destruction_eff;
     const double optical_depth = epsilon * N_SNe * M_swept / M_gas;
     const double radius_factor = exp(-optical_depth / 3.);
@@ -1852,7 +1850,7 @@ void cooling_do_grackle_cooling(
 
   /* Compute the ISRF */
   p->cooling_data.G0 =
-      fmax(cooling_compute_G0(p, xp, p->cooling_data.subgrid_dens, T_warm,
+      fmax(cooling_compute_G0(p, xp, p->cooling_data.subgrid_dens, T_warm, dt,
                               cooling, galaxy_mstar, galaxy_ssfr),
            0.);
 
@@ -1969,15 +1967,13 @@ void cooling_do_grackle_cooling(
 }
 
 /**
- * @brief Decay the SN rate deposited on a gas particle by stellar feedback,
- * once it has been used over a step of length dt. With no smoothing time,
- * it is dropped, so that each deposit is used for one step.
+ * @brief Decay the pending SN count deposited on a gas particle after use.
  *
  * @param cooling The #cooling_function_data used in the run.
  * @param p Pointer to the particle data.
  * @param dt The time-step of this particle.
  */
-static INLINE void cooling_decay_SNe_rate(
+static INLINE void cooling_decay_SNe_count(
     const struct cooling_function_data *restrict cooling,
     struct part *restrict p, const double dt) {
 #if COOLING_GRACKLE_MODE >= 2
@@ -2028,11 +2024,10 @@ void cooling_cool_part(const struct phys_const *restrict phys_const,
   /* No cooling happens over zero time */
   if (dt == 0.f || dt_therm == 0.f) return;
 
-  /* In KIARA_RT we do cooling in rt_thermochemistry, so we don't do it here.
-   * This task runs before stellar feedback and RT in each step, so the SN
-   * rate deposited last step has already been used by RT: decay it here. */
+  /* In KIARA_RT cooling runs in rt_thermochemistry, which has used the
+   * pending count from the previous step; decay it here. */
   if (cooling->do_cooling_in_rt) {
-    cooling_decay_SNe_rate(cooling, p, dt);
+    cooling_decay_SNe_count(cooling, p, dt);
     return;
   }
 
@@ -2064,12 +2059,12 @@ void cooling_cool_part(const struct phys_const *restrict phys_const,
     xp->cooling_data.time_last_event = time;
   }
 
-  /* Run once outside the Firehose/Grackle helpers to avoid duplicate processing. */
+  /* Run once outside the Firehose/Grackle helpers to avoid duplicate
+   * processing. */
   cooling_evolve_dust_collisions(us, cosmo, cooling, p, xp, dt, time);
 
-  /* The SN rate deposited by stellar feedback has now been used (for the
-   * dust and G0) over this step */
-  cooling_decay_SNe_rate(cooling, p, dt);
+  /* The count has now been used for dust and, where selected, SN-based G0. */
+  cooling_decay_SNe_count(cooling, p, dt);
 }
 
 /**
@@ -2250,7 +2245,7 @@ void cooling_split_part(struct part *p, struct xpart *xp, double n) {
   xp->cooling_data.radiated_energy /= n;
 #if COOLING_GRACKLE_MODE >= 2
   p->cooling_data.dust_mass /= n;
-  /* Preserve the particle's share of the deposited SN rate across splitting. */
+  /* Divide the pending SN count between the split particles. */
   p->feedback_data.SNe_ThisTimeStep /= n;
 #endif
 }

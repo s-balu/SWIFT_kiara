@@ -484,8 +484,7 @@ __attribute__((always_inline)) INLINE static void cooling_read_parameters(
   cooling->use_grackle_dust_evol = 0;
 #endif
 
-  /* The SN rate that stellar feedback deposits on the gas is used (and
-   * decays) here, so its smoothing time is read with the cooling */
+  /* The pending SN count deposited on gas is consumed over this timescale. */
   cooling->SNe_smoothing_time =
       parser_get_opt_param_double(
           parameter_file, "KIARAFeedback:SNe_smoothing_time_in_Myr", 0.) *

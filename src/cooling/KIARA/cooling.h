@@ -586,6 +586,26 @@ cooling_compute_self_shielding(const struct part *restrict p,
 }
 
 /**
+ * @brief Return the SN count consumed over the current gas step.
+ */
+INLINE static double cooling_get_SNe_count_for_step(
+    const struct cooling_function_data *cooling, const struct part *p,
+    const double dt) {
+#if COOLING_GRACKLE_MODE >= 2
+  if (dt <= 0. || p->feedback_data.SNe_ThisTimeStep <= 0.) return 0.;
+  if (cooling->SNe_smoothing_time > 0.)
+    return p->feedback_data.SNe_ThisTimeStep *
+           -expm1(-dt / cooling->SNe_smoothing_time);
+  return p->feedback_data.SNe_ThisTimeStep;
+#else
+  (void)cooling;
+  (void)p;
+  (void)dt;
+  return 0.;
+#endif
+}
+
+/**
  * @brief Returns the value of G0 for given particle p
  * based on symbolic regression from FIRE simulations (from Diane Salim)
  *
@@ -709,7 +729,7 @@ __attribute__((always_inline)) INLINE static float cooling_G0_from_FIRE(
  */
 __attribute__((always_inline)) INLINE static float cooling_compute_G0(
     const struct part *restrict p, const struct xpart *restrict xp,
-    const float rho, const float T_warm,
+    const float rho, const float T_warm, const double dt,
     const struct cooling_function_data *cooling, const float mstar,
     const float ssfr) {
 
@@ -745,13 +765,15 @@ __attribute__((always_inline)) INLINE static float cooling_compute_G0(
   }
 #if COOLING_GRACKLE_MODE >= 2
   else if (cooling->G0_computation_method == 4) {
-    /* SNe_ThisTimeStep stores the SN **rate** (internal units) */
-    G0 = p->feedback_data.SNe_ThisTimeStep * cooling->G0_factorSNe;
+    const double sne_count = cooling_get_SNe_count_for_step(cooling, p, dt);
+    G0 = (dt > 0. ? sne_count / dt : 0.) * cooling->G0_factorSNe;
   } else if (cooling->G0_computation_method == 5) {
     float pssfr = max(p->sf_data.SFR, 0.f);
     pssfr /= max(mstar, 8. * p->mass);
+    const double sne_count = cooling_get_SNe_count_for_step(cooling, p, dt);
+    const double sne_rate = dt > 0. ? sne_count / dt : 0.;
     G0 = max(ssfr, pssfr) * cooling->G0_factor2 +
-         p->feedback_data.SNe_ThisTimeStep * cooling->G0_factorSNe;
+         sne_rate * cooling->G0_factorSNe;
   } else if (cooling->G0_computation_method == 6) {
     G0 = cooling_G0_from_FIRE(p, xp, rho, T_warm, cooling);
   }
