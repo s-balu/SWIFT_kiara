@@ -1720,60 +1720,63 @@ void cooling_init_chemistry(
     const struct cooling_function_data *restrict cooling,
     struct part *restrict p) {
 
-  /* If it's eligible for SF and metal-free, crudely self-enrich to
-     very small level; needed to kick-start Grackle dust. Arbitrary
-     amount to kick-start the model */
-  const float init_dust_to_gas = 0.2f;
-  const float total_Z = chemistry_get_total_metal_mass_fraction_for_cooling(p);
-  const float self_Z =
-      (1.f - init_dust_to_gas) * cooling->self_enrichment_metallicity;
-  /* Small margin so round-off in the enriched total doesn't re-trigger this
-   * every step (which would reset any dust grown since) */
-  if (p->cooling_data.subgrid_temp > 0.f && total_Z < 0.99f * self_Z) {
-    float Z_sun = 0.f;
+  const double mass = hydro_get_mass(p);
+  const double old_dust_mass = p->cooling_data.dust_mass;
+  const double total_Z =
+      chemistry_get_total_metal_mass_fraction_for_cooling(p) +
+      old_dust_mass / mass;
+  const double self_Z = cooling->self_enrichment_metallicity;
+  /* Top up the total metal floor without undoing gas-to-dust depletion. */
+  if (p->cooling_data.subgrid_temp > 0.f && total_Z < 0.99 * self_Z) {
+    double Z_sun = 0.;
     for (int i = 1; i < 10; i++) {
       Z_sun += cooling->chemistry.SolarAbundances[i];
     }
+    if (!(Z_sun > 0.)) error("Invalid solar abundances for self-enrichment");
 
-    /* Distribute the self-enrichment metallicity among elements
-       assuming solar abundance ratios*/
-    p->chemistry_data.metal_mass_fraction_total = 0.f;
-    p->cooling_data.dust_mass = 0.f;
-    /* Offset index for the SolarAbundaces array (starts at He -> Fe) */
-    int j = 1;
+    const double deficit = self_Z - total_Z;
+    const double seed_dust_fraction = cooling->use_grackle_dust_evol ? 0.2 : 0.;
+    const double added_dust_mass = seed_dust_fraction * deficit * mass;
+    const double new_dust_mass = old_dust_mass + added_dust_mass;
+    const double added_gas_metals = (1. - seed_dust_fraction) * deficit;
+    cooling_init_dust_distribution(cooling, p);
+
+    /* Add solar-ratio seed material while retaining existing element masses. */
     for (int i = chemistry_element_C; i < chemistry_element_count; i++) {
-      /* fraction of gas mass in each element */
-      p->chemistry_data.metal_mass_fraction[i] =
-          (1.f - init_dust_to_gas) * cooling->chemistry.SolarAbundances[j] *
-          cooling->self_enrichment_metallicity;
-      p->chemistry_data.metal_mass_fraction[i] /= Z_sun;
-
-      /* Update to the new metal mass fraction */
-      p->chemistry_data.metal_mass_fraction_total +=
-          p->chemistry_data.metal_mass_fraction[i];
-
-      /* fraction of dust mass in each element (sums to 1) */
+      const double solar_fraction =
+          cooling->chemistry.SolarAbundances[i - 1] / Z_sun;
+      p->chemistry_data.metal_mass_fraction[i] +=
+          added_gas_metals * solar_fraction;
       p->cooling_data.dust_mass_fraction[i] =
-          cooling->chemistry.SolarAbundances[j] / Z_sun;
-      j++;
+          new_dust_mass > 0.
+              ? (old_dust_mass * p->cooling_data.dust_mass_fraction[i] +
+                 added_dust_mass * solar_fraction) /
+                    new_dust_mass
+              : 0.f;
     }
+    p->chemistry_data.metal_mass_fraction_total += added_gas_metals;
 
-    /* No H or He in dust; element 0 holds the sum over elements */
-    p->cooling_data.dust_mass_fraction[chemistry_element_H] = 1.f;
+    p->cooling_data.dust_mass_fraction[chemistry_element_H] =
+        new_dust_mass > 0. ? 1.f : 0.f;
     p->cooling_data.dust_mass_fraction[chemistry_element_He] = 0.f;
 
-    /* Dust holds the remaining init_dust_to_gas of the self-enriched metals */
-    p->cooling_data.dust_mass =
-        init_dust_to_gas * cooling->self_enrichment_metallicity * p->mass;
+    float seed[KIARA_DUST_N_MATERIALS][KIARA_DUST_N_BINS];
     kiara_dust_distribution_seed(
         cooling->dust_initial_distribution,
-        p->cooling_data.dust_mass_fraction[chemistry_element_C],
-        p->cooling_data.dust_size_distribution);
+        cooling->chemistry.SolarAbundances[chemistry_element_C - 1] / Z_sun,
+        seed);
+    for (int material = 0; material < KIARA_DUST_N_MATERIALS; ++material)
+      for (int bin = 0; bin < KIARA_DUST_N_BINS; ++bin)
+        p->cooling_data.dust_size_distribution[material][bin] =
+            new_dust_mass > 0.
+                ? (old_dust_mass *
+                       p->cooling_data.dust_size_distribution[material][bin] +
+                   added_dust_mass * seed[material][bin]) /
+                      new_dust_mass
+                : 0.f;
+    p->cooling_data.dust_mass = new_dust_mass;
 
-    p->chemistry_data.metal_mass_fraction[chemistry_element_He] =
-        cooling->chemistry.SolarAbundances[0];
-    /* Since He is fixed at SolarAbundances[0], make sure the hydrogen
-       fraction makes sense, i.e. X_H + Y_He + Z + D = 1. */
+    /* Preserve helium and close X_H + Y_He + Z_gas + D = 1. */
     p->chemistry_data.metal_mass_fraction[chemistry_element_H] =
         1.f - p->chemistry_data.metal_mass_fraction[chemistry_element_He] -
         p->chemistry_data.metal_mass_fraction_total -
