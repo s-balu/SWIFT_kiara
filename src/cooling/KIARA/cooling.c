@@ -1418,14 +1418,21 @@ static void cooling_evolve_grain_size(
    * t_accr = t_ref * (a/a_ref) * (rho_ref/rho_g) * (T_ref/T_g)^1/2 *
    * (Z_ref/Z_g)
    */
-  const double rho_cgs = hydro_get_physical_density(p, cosmo) *
-                         units_cgs_conversion_factor(us, UNIT_CONV_DENSITY);
+  /* Use the same cold subgrid phase as Grackle whenever the ISM model is on. */
+  const int cold = p->cooling_data.subgrid_temp > 0.f &&
+                   p->cooling_data.subgrid_fcold > 1.e-6f;
+  const double rho = cold ? p->cooling_data.subgrid_dens
+                          : hydro_get_physical_density(p, cosmo);
+  const double rho_cgs =
+      rho * units_cgs_conversion_factor(us, UNIT_CONV_DENSITY);
   const float Z_gas = chemistry_get_total_metal_mass_fraction_for_cooling(p);
 
-  if (Z_gas > 0.f && rho_cgs > 0.) {
-    const float u_phys = hydro_get_physical_internal_energy(p, xp, cosmo);
-    const float T_gas = cooling_convert_u_to_temp(
-        u_phys, xp->cooling_data.e_frac, cooling, p, xp);
+  if (Z_gas > 0.f && isfinite(rho_cgs) && rho_cgs > 0.) {
+    const double T_gas =
+        cold ? p->cooling_data.subgrid_temp
+             : cooling_convert_u_to_temp(
+                   hydro_get_physical_internal_energy(p, xp, cosmo),
+                   xp->cooling_data.e_frac, cooling, p, xp);
     const double T_gas_K =
         T_gas * units_cgs_conversion_factor(us, UNIT_CONV_TEMPERATURE);
     const double T_g = fmax(T_gas_K, 10.);
