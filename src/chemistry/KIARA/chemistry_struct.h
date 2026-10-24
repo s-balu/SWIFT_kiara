@@ -19,6 +19,8 @@
 #ifndef SWIFT_CHEMISTRY_STRUCT_KIARA_H
 #define SWIFT_CHEMISTRY_STRUCT_KIARA_H
 
+#include "chemistry/KIARA/dust.h"
+
 #define FIREHOSE_COOLLIM 0.1f            /* -u_new / u */
 #define FIREHOSE_HEATLIM 10.f            /* +u_new / u */
 #define FIREHOSE_EPSILON_TOLERANCE 1.e-6 /* Minimum rel. difference to add */
@@ -181,6 +183,9 @@ struct chemistry_part_data {
 #if COOLING_GRACKLE_MODE >= 2
   /*! Variation of the dust mass (per unit gas mass) by element */
   float dZ_dust_dt[chemistry_element_count];
+
+  /*! Variation of the dust mass per unit gas mass in each material/size bin */
+  float dZ_dust_size_dt[KIARA_DUST_N_MATERIALS][KIARA_DUST_N_BINS];
 #endif
 
   /*! Velocity shear tensor in internal and physical units. */
@@ -220,6 +225,9 @@ struct chemistry_part_data {
 
   /*! Firehose exchanged dust mass */
   float dm_dust;
+
+  /*! Firehose exchanged dust mass in every material and size bin */
+  float dm_dust_size[KIARA_DUST_N_MATERIALS][KIARA_DUST_N_BINS];
 
   /*! Firehose exchanged dust mass metals */
   float dm_dust_Z[chemistry_element_count];

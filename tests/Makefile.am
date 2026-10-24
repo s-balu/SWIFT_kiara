@@ -202,7 +202,9 @@ testZoomVoidTree_SOURCES = testZoomVoidTree.c
 testZoomGravityDown_SOURCES = testZoomGravityDown.c
 
 # Files necessary for distribution
-EXTRA_DIST = testReading.sh makeInput.py testActivePair.sh \
+EXTRA_DIST = testKIARADustGrid.py testKIARADustGrid.c testKIARADustSources.c \
+             testKIARADustEvolution.c testKIARADustCooling.py \
+             testReading.sh makeInput.py testActivePair.sh \
              test27cells.sh test27cellsPerturbed.sh testParser.sh testPeriodicBC.sh \
              testPeriodicBCPerturbed.sh test125cells.sh test125cellsPerturbed.sh testParserInput.yaml \
              difffloat.py tolerance_125_normal.dat tolerance_125_perturbed.dat \

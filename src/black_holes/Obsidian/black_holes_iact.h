@@ -634,6 +634,12 @@ runner_iact_nonsym_bh_gas_swallow(
       struct chemistry_part_data *pj_chem = &pj->chemistry_data;
       chemistry_transfer_part_to_bpart(bi_chem, pj_chem, nibbled_mass,
                                        nibbled_mass / pj_mass_orig);
+#if defined(CHEMISTRY_KIARA) && COOLING_GRACKLE_MODE >= 2
+      /* Dust leaves with the same fraction of gas during nibbling. */
+      chemistry_add_dust_to_bpart(bi_chem, &pj->cooling_data,
+                                  nibbled_mass / pj_mass_orig);
+      pj->cooling_data.dust_mass *= new_gas_mass / pj_mass_orig;
+#endif
     }
 
     /* This particle is swallowed by the BH with the largest ID of all the
@@ -1444,6 +1450,11 @@ runner_iact_nonsym_bh_gas_feedback(
       }
 
       pj->chemistry_data.metal_mass_fraction_total = new_Z_total;
+#ifdef COOLING_KIARA
+      /* Complete destruction also clears the composition sum and size bins. */
+      pj->cooling_data.dust_mass_fraction[chemistry_element_H] = 0.f;
+      kiara_dust_distribution_zero(pj->cooling_data.dust_size_distribution);
+#endif
     }
 #endif
 

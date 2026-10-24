@@ -22,6 +22,8 @@
 /* include grackle */
 #include <grackle.h>
 
+#include "chemistry/KIARA/dust.h"
+
 /**
  * @file src/cooling/KIARA/cooling_properties.h
  * @brief Properties of the KIARA (grackle/crackle) cooling function
@@ -114,8 +116,7 @@ struct cooling_function_data {
    * its cooling time (internal units) */
   double firehose_rho_max;
 
-  /*! Timescale (internal units) over which the SN rate deposited on gas
-   * particles by stellar feedback decays (0: used for one cooling step) */
+  /*! Exponential consumption timescale for the deposited SN count (0: once). */
   double SNe_smoothing_time;
 
   /*! track H2 formation; this is set within the code based on selection options
@@ -149,11 +150,30 @@ struct cooling_function_data {
   /*! Dust grain size (micron) */
   double dust_grainsize;
 
+  /*! Source spectrum for dust with no size history (0=SNII, 1=AGB). */
+  int dust_initial_source;
+  double dust_initial_distribution[KIARA_DUST_N_BINS];
+
   /*! Reference density for dust growth (g/cm^3) */
   double dust_growth_densref;
 
   /*! Dust growth time-scale at the reference density (Gyr) */
   double dust_growth_tauref;
+
+  /*! Legacy grid endpoints and dust microphysics parameters. */
+  double dust_small_grainsize;
+  double dust_large_grainsize;
+  double dust_grain_density;
+  double dust_growth_Tref;
+  double dust_small_fraction_SNII;
+  double dust_small_fraction_AGB;
+
+  /*! Representative grain radius of every size bin, in micron. */
+  double dust_grain_sizes[KIARA_DUST_N_BINS];
+
+  /*! Enable Li-based grain collisions on the existing material/size grid. */
+  int dust_coagulation;
+  int dust_shattering;
 
   /*! For dust model, need self-enrichment up to a small metallicity to
    * kick-start dust */

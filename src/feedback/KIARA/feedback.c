@@ -22,6 +22,8 @@
 #include "feedback.h"
 
 /* Local includes. */
+#include "chemistry/KIARA/dust_parameters.h"
+#include "chemistry/KIARA/dust_sources.h"
 #include "hydro_properties.h"
 #include "inline.h"
 #include "random.h"
@@ -144,7 +146,7 @@ double feedback_get_lum_from_star_particle(
  * @brief Condense part of a star particle's ejected metals into dust.
  *
  * Uses the condensation efficiencies of the Simba/Li+2019 dust model: for
- * stars older than 100 Myr with C/O > 1 (by mass excess), C condenses into
+ * stars older than 100 Myr with C/O > 1 by number, C condenses into
  * graphite with the AGB C-rich efficiency; otherwise the SNII (age < 100
  * Myr) or AGB O-rich efficiencies are used for each element, with O locked
  * in silicates and oxides of Mg, Si, S, Ca and Fe. The dust formed in each
@@ -170,9 +172,10 @@ void feedback_dust_production_condensation(
     sp->feedback_data.delta_dust_mass[k] = 0.f;
   }
 
-  const double C_minus_O = sp->feedback_data.metal_mass[chemistry_element_C] -
-                           sp->feedback_data.metal_mass[chemistry_element_O];
-  if (star_age > 100. && C_minus_O > 0.) {
+  const double C_minus_0_75O =
+      sp->feedback_data.metal_mass[chemistry_element_C] -
+      0.75 * sp->feedback_data.metal_mass[chemistry_element_O];
+  if (star_age > 100. && C_minus_0_75O > 0.) {
     /* Compute dust mass created in high-C/O AGB stars
      * (atomic C forms graphite)
      */
@@ -191,6 +194,11 @@ void feedback_dust_production_condensation(
 
     /* Subtract this from ejecta metals */
     sp->feedback_data.metal_mass[chemistry_element_C] -=
+        sp->feedback_data.delta_dust_mass[chemistry_element_C];
+    /* Keep gas-metal and dust totals consistent with the condensed carbon. */
+    sp->feedback_data.total_metal_mass -=
+        sp->feedback_data.delta_dust_mass[chemistry_element_C];
+    sp->feedback_data.delta_dust_mass[0] =
         sp->feedback_data.delta_dust_mass[chemistry_element_C];
   } else {
     /* Choose dust table: If age > 100 Myr, assume ejecta is from AGB,
@@ -240,6 +248,29 @@ void feedback_dust_production_condensation(
       sp->feedback_data.delta_dust_mass[0] +=
           sp->feedback_data.delta_dust_mass[k];
     }
+  }
+
+  /* Split newly condensed carbon into carbonaceous grains and the remaining
+   * refractory dust into silicates.  The size-bin shape is a framework-side
+   * choice; Grackle continues to receive only the total dust and elemental
+   * dust densities. */
+  const double (*source_distribution)[KIARA_DUST_N_BINS] =
+      (star_age > 100.) ? fb_props->dust_size_distribution_AGB
+                        : fb_props->dust_size_distribution_SNII;
+  double carbon_dust =
+      sp->feedback_data.delta_dust_mass[chemistry_element_C];
+  double silicate_dust = 0.;
+  for (k = chemistry_element_He; k < chemistry_element_count; ++k) {
+    if (k != chemistry_element_C)
+      silicate_dust += sp->feedback_data.delta_dust_mass[k];
+  }
+  for (int material = 0; material < KIARA_DUST_N_MATERIALS; ++material) {
+    const double material_mass = (material == kiara_dust_carbonaceous)
+                                     ? carbon_dust
+                                     : silicate_dust;
+    for (int bin = 0; bin < KIARA_DUST_N_BINS; ++bin)
+      sp->feedback_data.delta_dust_size_mass[material][bin] =
+          material_mass * source_distribution[material][bin];
   }
 }
 #endif
@@ -1875,6 +1906,33 @@ void feedback_props_init(struct feedback_props *fp,
 #if COOLING_GRACKLE_MODE >= 2
   fp->max_dust_fraction = parser_get_opt_param_double(
       params, "KIARAFeedback:max_dust_fraction", 0.9);
+  const int legacy_sn =
+      parser_does_param_exist(params, "KIARAFeedback:dust_small_fraction_SNII");
+  const int legacy_agb =
+      parser_does_param_exist(params, "KIARAFeedback:dust_small_fraction_AGB");
+  fp->dust_small_fraction_SNII =
+      legacy_sn ? parser_get_param_double(
+                      params, "KIARAFeedback:dust_small_fraction_SNII")
+                : 0.005;
+  fp->dust_small_fraction_AGB =
+      legacy_agb ? parser_get_param_double(
+                       params, "KIARAFeedback:dust_small_fraction_AGB")
+                 : 0.27;
+  if (legacy_sn || legacy_agb)
+    warning(
+        "KIARA dust_small_fraction_SNII/AGB are obsolete; configure physical "
+        "dust source spectra instead");
+  double radius[KIARA_DUST_N_BINS], sn_shape[KIARA_DUST_N_BINS],
+      agb_shape[KIARA_DUST_N_BINS];
+  kiara_dust_read_grid(params, radius);
+  kiara_dust_read_source(params, 0, radius, sn_shape);
+  kiara_dust_read_source(params, 1, radius, agb_shape);
+  for (int material = 0; material < KIARA_DUST_N_MATERIALS; ++material) {
+    for (int bin = 0; bin < KIARA_DUST_N_BINS; ++bin) {
+      fp->dust_size_distribution_SNII[material][bin] = sn_shape[bin];
+      fp->dust_size_distribution_AGB[material][bin] = agb_shape[bin];
+    }
+  }
 #endif
 
   /* Convert Kelvin to internal energy and internal units */
@@ -1925,6 +1983,19 @@ void feedback_props_init(struct feedback_props *fp,
             fp->with_SNII_energy_from_chem5);
     message("Feedback use Chem5 SNIa energy: %d",
             fp->with_SNIa_energy_from_chem5);
+#if COOLING_GRACKLE_MODE >= 2
+    message("Feedback dust maximum condensation fraction: %g",
+            fp->max_dust_fraction);
+    message("Feedback dust SNII condensation boost: %g", dust_boost_factor);
+    message("Feedback dust SNII carbon condensation efficiency: %g",
+            fp->delta_SNII[chemistry_element_C]);
+    message("Feedback dust AGB C-rich carbon condensation efficiency: %g",
+            fp->delta_AGBCOG1[chemistry_element_C]);
+    message("Feedback dust SNII smallest-bin mass fraction: %g",
+            fp->dust_size_distribution_SNII[kiara_dust_carbonaceous][0]);
+    message("Feedback dust AGB smallest-bin mass fraction: %g",
+            fp->dust_size_distribution_AGB[kiara_dust_carbonaceous][0]);
+#endif
   }
 }
 

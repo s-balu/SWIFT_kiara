@@ -327,6 +327,11 @@ __attribute__((always_inline)) INLINE static void feedback_reset_feedback(
     sp->feedback_data.delta_dust_mass[i] = 0.;
 #endif
   }
+#if COOLING_GRACKLE_MODE >= 2
+  for (int material = 0; material < KIARA_DUST_N_MATERIALS; ++material)
+    for (int bin = 0; bin < KIARA_DUST_N_BINS; ++bin)
+      sp->feedback_data.delta_dust_size_mass[material][bin] = 0.;
+#endif
   sp->feedback_data.total_metal_mass = 0.;
 
   /* Zero the energy to inject */
@@ -808,6 +813,11 @@ __attribute__((always_inline)) INLINE static void feedback_prepare_feedback(
       sp->feedback_data.delta_dust_mass[elem] *= ejecta_scale;
 #endif
     }
+#if COOLING_GRACKLE_MODE >= 2
+    for (int material = 0; material < KIARA_DUST_N_MATERIALS; ++material)
+      for (int bin = 0; bin < KIARA_DUST_N_BINS; ++bin)
+        sp->feedback_data.delta_dust_size_mass[material][bin] *= ejecta_scale;
+#endif
   }
 
   /* Compute the total mass to distribute */
@@ -821,9 +831,8 @@ __attribute__((always_inline)) INLINE static void feedback_prepare_feedback(
   sp->last_enrichment_time = (with_cosmology) ? cosmo->a : time;
 
 #if COOLING_GRACKLE_MODE >= 2
-  /* Update the number of SNe that have gone off, used in Grackle dust model.
-     Actually stores SNe rate */
-  sp->feedback_data.SNe_ThisTimeStep = N_SNe / dt;
+  /* Store the SN count for this enrichment interval for kernel deposition. */
+  sp->feedback_data.SNe_ThisTimeStep = N_SNe;
   sp->feedback_data.SNe_Total += N_SNe;
 #endif
 

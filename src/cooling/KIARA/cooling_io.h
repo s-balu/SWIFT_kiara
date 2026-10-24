@@ -23,6 +23,7 @@
 /* Local includes */
 #include "cooling.h"
 #include "cooling_properties.h"
+#include "chemistry/KIARA/dust_parameters.h"
 #include "engine.h"
 #include "io_properties.h"
 
@@ -49,6 +50,25 @@ __attribute__((always_inline)) INLINE static void cooling_write_flavour(
   io_write_attribute_s(h_grp, "Cooling Model", "Grackle3");
 #else
   error("This function should be called only with one of the Grackle cooling.");
+#endif
+
+#if COOLING_GRACKLE_MODE >= 2
+  io_write_attribute_i(h_grp, "KIARA dust materials",
+                       KIARA_DUST_N_MATERIALS);
+  io_write_attribute_i(h_grp, "KIARA dust size bins per material",
+                       KIARA_DUST_N_BINS);
+  io_write_attribute(h_grp, "KIARA dust grain-size bin centres [micron]",
+                     DOUBLE, cooling->dust_grain_sizes,
+                     KIARA_DUST_N_BINS);
+  io_write_attribute_i(h_grp, "KIARA dust coagulation", cooling->dust_coagulation);
+  io_write_attribute_i(h_grp, "KIARA dust shattering", cooling->dust_shattering);
+  io_write_attribute_d(h_grp, "KIARA dust grain density [g/cm^3]",
+                       cooling->dust_grain_density);
+  io_write_attribute_s(h_grp, "KIARA dust initial source",
+                       cooling->dust_initial_source ? "AGB" : "SNII");
+  io_write_attribute(h_grp, "KIARA dust initial grain-size mass fractions",
+                     DOUBLE, cooling->dust_initial_distribution,
+                     KIARA_DUST_N_BINS);
 #endif
 }
 #endif
@@ -230,6 +250,26 @@ INLINE static void convert_part_cooling_time(const struct engine *e,
                    &xp_temp, p->rho, hydro_get_comoving_internal_energy(p, xp));
 }
 
+#if COOLING_GRACKLE_MODE >= 2
+INLINE static void convert_part_carbonaceous_dust_bin_masses(
+    const struct engine *e, const struct part *p, const struct xpart *xp,
+    float *ret) {
+  for (int bin = 0; bin < KIARA_DUST_N_BINS; ++bin)
+    ret[bin] = p->cooling_data.dust_mass *
+               p->cooling_data
+                   .dust_size_distribution[kiara_dust_carbonaceous][bin];
+}
+
+INLINE static void convert_part_silicate_dust_bin_masses(
+    const struct engine *e, const struct part *p, const struct xpart *xp,
+    float *ret) {
+  for (int bin = 0; bin < KIARA_DUST_N_BINS; ++bin)
+    ret[bin] = p->cooling_data.dust_mass *
+               p->cooling_data.dust_size_distribution[kiara_dust_silicate]
+                                                        [bin];
+}
+#endif
+
 /**
  * @brief Specifies which particle fields to write to a dataset
  *
@@ -325,6 +365,20 @@ __attribute__((always_inline)) INLINE static int cooling_write_particles(
       io_make_output_field("DustTemperatures", FLOAT, 1, UNIT_CONV_TEMPERATURE,
                            0.f, parts, cooling_data.dust_temperature,
                            "Dust temperatures in subgrid ISM dust model.");
+  num++;
+
+  list[num] = io_make_output_field_convert_part(
+      "DustCarbonaceousBinMasses", FLOAT, KIARA_DUST_N_BINS, UNIT_CONV_MASS,
+      0.f, parts, xparts, convert_part_carbonaceous_dust_bin_masses,
+      "Carbonaceous dust mass in each grain-size bin; bin centres are stored "
+      "in the CoolingScheme metadata.");
+  num++;
+
+  list[num] = io_make_output_field_convert_part(
+      "DustSilicateBinMasses", FLOAT, KIARA_DUST_N_BINS, UNIT_CONV_MASS, 0.f,
+      parts, xparts, convert_part_silicate_dust_bin_masses,
+      "Silicate dust mass in each grain-size bin; bin centres are stored in "
+      "the CoolingScheme metadata.");
   num++;
 
   list[num] = io_make_output_field_convert_part(
@@ -430,8 +484,7 @@ __attribute__((always_inline)) INLINE static void cooling_read_parameters(
   cooling->use_grackle_dust_evol = 0;
 #endif
 
-  /* The SN rate that stellar feedback deposits on the gas is used (and
-   * decays) here, so its smoothing time is read with the cooling */
+  /* The pending SN count deposited on gas is consumed over this timescale. */
   cooling->SNe_smoothing_time =
       parser_get_opt_param_double(
           parameter_file, "KIARAFeedback:SNe_smoothing_time_in_Myr", 0.) *
@@ -456,6 +509,57 @@ __attribute__((always_inline)) INLINE static void cooling_read_parameters(
 
   cooling->dust_growth_tauref = parser_get_opt_param_double(
       parameter_file, "KIARACooling:dust_growth_tauref", 1.0);
+
+  cooling->dust_grain_density = parser_get_opt_param_double(
+      parameter_file, "KIARACooling:dust_grain_density", 2.4);
+  if (!isfinite(cooling->dust_grain_density) || cooling->dust_grain_density <= 0.)
+    error("KIARACooling:dust_grain_density must be finite and positive");
+
+  cooling->dust_coagulation = parser_get_opt_param_int(
+      parameter_file, "KIARACooling:dust_coagulation", 1);
+  cooling->dust_shattering = parser_get_opt_param_int(
+      parameter_file, "KIARACooling:dust_shattering", 1);
+  if ((cooling->dust_coagulation != 0 && cooling->dust_coagulation != 1) ||
+      (cooling->dust_shattering != 0 && cooling->dust_shattering != 1))
+    error("KIARA dust_coagulation and dust_shattering must be 0 or 1");
+#ifndef HAVE_LIBGSL
+  if (cooling->use_grackle_dust_evol &&
+      (cooling->dust_coagulation || cooling->dust_shattering))
+    error("KIARA grain collisions require GSL; configure with --with-gsl "
+          "or disable dust_coagulation and dust_shattering");
+#endif
+
+  cooling->dust_growth_Tref = parser_get_opt_param_double(
+      parameter_file, "KIARACooling:dust_growth_Tref", 20.0);
+  if (cooling->use_grackle_dust_evol &&
+      (!isfinite(cooling->dust_growth_tauref) ||
+       cooling->dust_growth_tauref <= 0. ||
+       !isfinite(cooling->dust_growth_densref) ||
+       cooling->dust_growth_densref <= 0. ||
+       !isfinite(cooling->dust_growth_Tref) ||
+       cooling->dust_growth_Tref <= 0. || !isfinite(cooling->dust_sne_coeff) ||
+       cooling->dust_sne_coeff < 0. ||
+       !isfinite(cooling->dust_sne_shockspeed) ||
+       cooling->dust_sne_shockspeed <= 0. ||
+       !isfinite(cooling->dust_destruction_eff) ||
+       cooling->dust_destruction_eff < 0. ||
+       cooling->dust_destruction_eff > 1.))
+    error(
+        "KIARA dust requires positive finite growth references and SN speed, "
+        "nonnegative finite SN energy, and destruction efficiency in [0,1]");
+
+  cooling->dust_small_fraction_SNII = parser_get_opt_param_double(
+      parameter_file, "KIARACooling:dust_small_fraction_SNII", 0.005);
+
+  cooling->dust_small_fraction_AGB = parser_get_opt_param_double(
+      parameter_file, "KIARACooling:dust_small_fraction_AGB", 0.27);
+
+  kiara_dust_read_grid(parameter_file, cooling->dust_grain_sizes);
+  cooling->dust_small_grainsize = cooling->dust_grain_sizes[0];
+  cooling->dust_large_grainsize = cooling->dust_grain_sizes[KIARA_DUST_N_BINS - 1];
+  cooling->dust_initial_source =
+      kiara_dust_read_initial_source(parameter_file, cooling->dust_grain_sizes,
+                                     cooling->dust_initial_distribution);
 
   cooling->cold_ISM_frac = parser_get_opt_param_double(
       parameter_file, "KIARACooling:cold_ISM_frac", 1.0);

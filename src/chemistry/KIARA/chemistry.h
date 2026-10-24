@@ -245,6 +245,7 @@ __attribute__((always_inline)) INLINE static void chemistry_init_part(
   cpd->du = 0.;
   cpd->dm = 0.f;
   cpd->dm_dust = 0.f;
+  kiara_dust_distribution_zero(cpd->dm_dust_size);
   for (int elem = 0; elem < chemistry_element_count; ++elem) {
     cpd->dZ_dt[elem] = 0.f;
     cpd->dm_Z[elem] = 0.f;
@@ -255,6 +256,7 @@ __attribute__((always_inline)) INLINE static void chemistry_init_part(
   }
 
 #if COOLING_GRACKLE_MODE >= 2
+  kiara_dust_distribution_zero(cpd->dZ_dust_size_dt);
   cpd->local_sfr_density = 0.f;
 #endif
 
@@ -428,6 +430,7 @@ chemistry_part_has_no_neighbours(struct part *restrict p,
   }
 
 #if COOLING_GRACKLE_MODE >= 2
+  kiara_dust_distribution_zero(cpd->dZ_dust_size_dt);
   /* No neighbours, so only the particle's own SFR contributes */
   const float h_inv = 1.0f / p->h;
   cpd->local_sfr_density = kernel_root * max(0.f, p->sf_data.SFR) *
@@ -958,16 +961,10 @@ __attribute__((always_inline)) INLINE static void chemistry_end_force(
     p->cooling_data.u_chemistry =
         hydro_get_physical_internal_energy(p, xp, cosmo);
 
-    /* Check dust change (a dust-free particle can still receive dust) */
-    float dust_eps = 0.f;
-    if (co->dust_mass > 0.f) {
-      dust_eps = fabs(ch->dm_dust) / co->dust_mass;
-    } else if (ch->dm_dust > 0.f) {
-      dust_eps = 1.f;
-    }
-
-    float new_dust_mass = co->dust_mass;
-    if (dust_eps >= FIREHOSE_EPSILON_TOLERANCE) new_dust_mass += ch->dm_dust;
+    /* Composition can mix even when the net total dust exchange is zero.
+     * Apply all dust fluxes together to preserve the pairwise exchange. */
+    const float old_dust_mass = co->dust_mass;
+    const float new_dust_mass = fmaxf(old_dust_mass + ch->dm_dust, 0.f);
 
     ch->metal_mass_fraction_total = 0.f;
     for (int elem = 0; elem < chemistry_element_count; ++elem) {
@@ -985,9 +982,9 @@ __attribute__((always_inline)) INLINE static void chemistry_end_force(
         ch->metal_mass_fraction_total += ch->metal_mass_fraction[elem];
       }
 
-      if (dust_eps >= FIREHOSE_EPSILON_TOLERANCE) {
+      if (new_dust_mass > 0.f) {
         const float old_dust_mass_Z =
-            co->dust_mass_fraction[elem] * co->dust_mass;
+            co->dust_mass_fraction[elem] * old_dust_mass;
         co->dust_mass_fraction[elem] =
             (old_dust_mass_Z + ch->dm_dust_Z[elem]) / new_dust_mass;
       }
@@ -1001,6 +998,19 @@ __attribute__((always_inline)) INLINE static void chemistry_end_force(
       }
 
       co->dust_mass = 0.f;
+      kiara_dust_distribution_zero(co->dust_size_distribution);
+    } else {
+      for (int material = 0; material < KIARA_DUST_N_MATERIALS; ++material) {
+        for (int bin = 0; bin < KIARA_DUST_N_BINS; ++bin) {
+          const float old_mass =
+              old_dust_mass * co->dust_size_distribution[material][bin];
+          co->dust_size_distribution[material][bin] =
+              fmaxf((old_mass + ch->dm_dust_size[material][bin]) /
+                        co->dust_mass,
+                    0.f);
+        }
+      }
+      kiara_dust_distribution_normalize(co->dust_size_distribution);
     }
 
     /* Make sure that X + Y + Z + D = 1 (Z is gas-phase only) */
@@ -1096,6 +1106,9 @@ __attribute__((always_inline)) INLINE static void chemistry_end_force(
   /* Found weird dZ_dt values so we should reset everything and exit */
   if (reset_time_derivatives) {
     ch->dZ_dt_total = 0.f;
+#if COOLING_GRACKLE_MODE >= 2
+    kiara_dust_distribution_zero(ch->dZ_dust_size_dt);
+#endif
     for (int elem = 0; elem < chemistry_element_count; elem++) {
       ch->dZ_dt[elem] = 0.f;
 #if COOLING_GRACKLE_MODE >= 2
@@ -1137,12 +1150,24 @@ __attribute__((always_inline)) INLINE static void chemistry_end_force(
          elem++) {
       co->dust_mass_fraction[elem] = dust_mass_elem[elem] * inv;
     }
+    /* Use the same diffusion flux for the material/size bins, including
+     * when total dust mass is unchanged or this particle was dust-free. */
+    for (int material = 0; material < KIARA_DUST_N_MATERIALS; ++material) {
+      for (int bin = 0; bin < KIARA_DUST_N_BINS; ++bin) {
+        const float bin_mass =
+            co->dust_mass * co->dust_size_distribution[material][bin] +
+            ch->dZ_dust_size_dt[material][bin] * dt * factor * m;
+        co->dust_size_distribution[material][bin] = fmaxf(bin_mass, 0.f) * inv;
+      }
+    }
+    kiara_dust_distribution_normalize(co->dust_size_distribution);
     co->dust_mass = new_dust_mass;
   } else {
     for (int elem = 0; elem < chemistry_element_count; elem++) {
       co->dust_mass_fraction[elem] = 0.f;
     }
     co->dust_mass = 0.f;
+    kiara_dust_distribution_zero(co->dust_size_distribution);
   }
 #endif
 
@@ -1318,6 +1343,20 @@ chemistry_transfer_part_to_bpart(struct chemistry_bpart_data *bp_data,
   for (int i = 0; i < chemistry_element_count; ++i)
     bp_data->metal_mass[i] += p_data->metal_mass_fraction[i] * nibble_mass;
 }
+
+#if COOLING_GRACKLE_MODE >= 2
+/** Add accreted dust elements to the BH metal inventory, excluding the sum slot. */
+__attribute__((always_inline)) INLINE static void chemistry_add_dust_to_bpart(
+    struct chemistry_bpart_data *bp_data,
+    const struct cooling_part_data *dust, const double fraction) {
+  const double mass = fraction * dust->dust_mass;
+  for (int elem = chemistry_element_C; elem < chemistry_element_count; ++elem) {
+    const double element_mass = mass * dust->dust_mass_fraction[elem];
+    bp_data->metal_mass[elem] += element_mass;
+    bp_data->metal_mass_total += element_mass;
+  }
+}
+#endif
 
 /**
  * @brief Add the chemistry data of a black hole to another one.

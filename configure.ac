@@ -342,6 +342,25 @@ if test "$enable_kiara_debugging_checks" = "yes"; then
    AC_DEFINE([KIARA_DEBUG_CHECKS],1,[Enable KIARA expensive debugging])
 fi
 
+# Number of grain-size bins per dust material in the KIARA dust model.  This
+# is a compile-time choice because the value is part of the particle layout.
+AC_ARG_WITH([kiara-dust-size-bins],
+   [AS_HELP_STRING([--with-kiara-dust-size-bins=<n>],
+      [number of grain-size bins per KIARA dust material @<:@default: 6@:>@])],
+   [kiara_dust_size_bins="$withval"],
+   [kiara_dust_size_bins=6]
+)
+case "$kiara_dust_size_bins" in
+   ''|*[!0-9]*)
+      AC_MSG_ERROR([--with-kiara-dust-size-bins must be an integer >= 2])
+   ;;
+esac
+if test "$kiara_dust_size_bins" -lt 2; then
+   AC_MSG_ERROR([--with-kiara-dust-size-bins must be >= 2])
+fi
+AC_DEFINE_UNQUOTED([KIARA_DUST_N_BINS], [$kiara_dust_size_bins],
+   [Number of grain-size bins per material in the KIARA dust model])
+
 # Check if Firehose expensive debugging is on.
 AC_ARG_ENABLE([firehose-debugging-checks],
    [AS_HELP_STRING([--enable-firehose-debugging-checks],
@@ -2138,12 +2157,8 @@ AC_SUBST([SUNDIALS_INCS])
 # As an example for this, see the call to AC_ARG_WITH for cooling.
 AC_ARG_WITH([subgrid],
 	[AS_HELP_STRING([--with-subgrid=<subgrid>],
-<<<<<<< HEAD
-		[Master switch for subgrid methods. Inexperienced user should start here. Options are: @<:@none, GEAR, GEAR-G3, AGORA, QLA, QLA-EAGLE, EAGLE, EAGLE-XL, SPIN_JET_EAGLE, FLAMINGO, SPIN_JET_FLAMINGO, SIMBA, KIARA, KIARART default: none@:>@]
-=======
 		[Master switch for subgrid methods. Inexperienced user should
-		start here. Options are: @<:@none, GEAR, GEAR-G3, GEAR-BH, AGORA, QLA, QLA-EAGLE, EAGLE, EAGLE-XL, SPIN_JET_EAGLE, FLAMINGO, SPIN_JET_FLAMINGO default: none@:>@]
->>>>>>> 477dd1cf93e98d8579814af69c2439dd70da3102
+		start here. Options are: @<:@none, GEAR, GEAR-G3, GEAR-BH, AGORA, QLA, QLA-EAGLE, EAGLE, EAGLE-XL, SPIN_JET_EAGLE, FLAMINGO, SPIN_JET_FLAMINGO, SIMBA, KIARA, KIARART default: none@:>@]
 	)],
 	[with_subgrid="$withval"],
 	[with_subgrid=none]
